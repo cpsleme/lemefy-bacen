@@ -1,0 +1,53 @@
+# Binary
+bin/
+dist/
+
+# Executable files
+/scraper
+
+# Database
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Logs
+logs/
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Testing
+coverage.out
+coverage.html
+profile.out
+
+# Docker
+docker-compose.override.yml
+
+# Dependency directories
+vendor/
+
+# Build artifacts
+*.exe
+*.so
+*.dll
+*.dylib
+
+# Temporary files
+*.tmp
+*.temp
