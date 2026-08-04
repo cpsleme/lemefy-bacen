@@ -51,3 +51,4 @@ vendor/
 # Temporary files
 *.tmp
 *.temp
+/mcp
