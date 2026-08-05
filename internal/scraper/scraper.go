@@ -119,7 +119,7 @@ func (s *Scraper) baseQuery() string {
 func (s *Scraper) Run() error {
 	s.logger.Info("Starting scraping process...")
 
-	normas, err := s.fetchNormas(s.baseQuery(), "", s.maxPages)
+	normas, err := s.fetchNormas(s.baseQuery(), "", s.maxPages, 0)
 	if err != nil {
 		return fmt.Errorf("failed to fetch normas from BCB API: %w", err)
 	}
@@ -160,11 +160,16 @@ func (s *Scraper) Run() error {
 
 // ScrapeByTipo scrapes norms filtered by a single norm type.
 func (s *Scraper) ScrapeByTipo(tipo models.TipoNorma) error {
+	return s.ScrapeByTipoWithLimit(tipo, 0)
+}
+
+// ScrapeByTipoWithLimit scrapes norms filtered by a single norm type with a limit.
+func (s *Scraper) ScrapeByTipoWithLimit(tipo models.TipoNorma, limit int) error {
 	query := fmt.Sprintf(`%s AND TipodoNormativoOWSCHCS="%s"`, s.baseQuery(), EscapeTipo(ApiTipoFor(tipo)))
 
 	s.resetStats()
 
-	normas, err := s.fetchNormas(query, "", s.maxPages)
+	normas, err := s.fetchNormas(query, "", s.maxPages, limit)
 	if err != nil {
 		return fmt.Errorf("failed to scrape by tipo: %w", err)
 	}
@@ -190,7 +195,7 @@ func (s *Scraper) ScrapeRecent(days int) error {
 
 	s.resetStats()
 
-	normas, err := s.fetchNormas(s.baseQuery(), refinement, s.maxPages)
+	normas, err := s.fetchNormas(s.baseQuery(), refinement, s.maxPages, 0)
 	if err != nil {
 		return fmt.Errorf("failed to scrape recent: %w", err)
 	}
@@ -211,9 +216,9 @@ func (s *Scraper) UpdateAllNormas() error {
 }
 
 // fetchNormas pages through the BCB Search API, translating each row into a
-// models.Norma. It stops early when the result set is exhausted or MaxPages is
-// reached.
-func (s *Scraper) fetchNormas(querytext, refinement string, maxPages int) ([]models.Norma, error) {
+// models.Norma. It stops early when the result set is exhausted, MaxPages is
+// reached, or limit is reached (0 means no limit).
+func (s *Scraper) fetchNormas(querytext, refinement string, maxPages int, limit int) ([]models.Norma, error) {
 	if refinement != "" {
 		querytext = fmt.Sprintf("%s AND %s", querytext, refinement)
 	}
@@ -231,6 +236,9 @@ func (s *Scraper) fetchNormas(querytext, refinement string, maxPages int) ([]mod
 		for _, row := range resp.Rows {
 			if n, ok := s.MapRowToNorma(row); ok {
 				all = append(all, n)
+				if limit > 0 && len(all) >= limit {
+					return all, nil
+				}
 			}
 		}
 		s.logger.WithField("url", bcbAPIBase).Debugf("Fetched page %d: %d rows", page, resp.RowCount)
@@ -317,6 +325,12 @@ func (s *Scraper) MapRowToNorma(r ApiRow) (models.Norma, bool) {
 		situacao = "Cancelado"
 	}
 
+	assunto := s.cleanText(r.AssuntoNormativoOWSMTXT)
+	sumario := s.cleanText(r.HitHighlightedSummary)
+	if len(assunto) > len(sumario) {
+		sumario = assunto
+	}
+
 	return models.Norma{
 		Numero:         numero,
 		Tipo:           tipo,
@@ -324,9 +338,10 @@ func (s *Scraper) MapRowToNorma(r ApiRow) (models.Norma, bool) {
 		DataPublicacao: dataPub,
 		DataVigencia:   dataPub,
 		URL:            docURL,
+		TextoURL:       docURL,
 		Situacao:       situacao,
-		Assunto:        s.cleanText(r.AssuntoNormativoOWSMTXT),
-		Sumario:        s.cleanText(r.HitHighlightedSummary),
+		Assunto:        assunto,
+		Sumario:        sumario,
 		ArquivoPDF:     "",
 		Texto:          "",
 	}, true
@@ -356,7 +371,7 @@ func (s *Scraper) FetchText(norma *models.Norma) string {
 	}
 
 	q := u.Query()
-	q.Set("p1", ApiTipoFor(norma.Tipo))
+	q.Set("p1", string(norma.Tipo))
 	q.Set("p2", norma.Numero)
 	u.RawQuery = q.Encode()
 
@@ -381,9 +396,7 @@ func (s *Scraper) FetchText(norma *models.Norma) string {
 	}
 
 	var contentResp struct {
-		Conteudo []struct {
-			Texto string `json:"Texto"`
-		} `json:"conteudo"`
+		Conteudo []map[string]interface{} `json:"conteudo"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&contentResp); err != nil {
 		s.logger.WithError(err).Warn("Failed to decode BCB content API response")
@@ -394,11 +407,57 @@ func (s *Scraper) FetchText(norma *models.Norma) string {
 		return ""
 	}
 
-	texto := contentResp.Conteudo[0].Texto
-	texto = strings.ReplaceAll(texto, "\r\n", "\n")
-	texto = strings.ReplaceAll(texto, "\r", "\n")
-	texto = s.cleanText(texto)
-	return texto
+	item := contentResp.Conteudo[0]
+	
+	if textoVal, ok := item["Texto"].(string); ok {
+		texto := textoVal
+		texto = strings.ReplaceAll(texto, "\r\n", "\n")
+		texto = strings.ReplaceAll(texto, "\r", "\n")
+		texto = s.cleanText(texto)
+		norma.Texto = texto
+	}
+	
+	if docVal, ok := item["Documentos"].(string); ok && docVal != "" {
+		parts := strings.Split(docVal, ";")
+		if len(parts) >= 1 {
+			norma.ArquivoPDF = strings.TrimSpace(parts[0])
+		}
+		norma.Documentos = s.cleanText(docVal)
+	}
+	
+	if douVal, ok := item["DOU"].(string); ok {
+		norma.DOU = s.cleanText(douVal)
+	}
+	
+	if assuntoVal, ok := item["Assunto"].(string); ok {
+		norma.Assunto = s.cleanText(assuntoVal)
+	}
+	
+	if normasVal, ok := item["NormasVinculadas"].(string); ok {
+		norma.NormasVinculadas = s.cleanText(normasVal)
+	}
+	
+	if refVal, ok := item["Referencias"].(string); ok {
+		norma.Referencias = s.cleanText(refVal)
+	}
+	
+	if atuVal, ok := item["Atualizacoes"].(string); ok {
+		norma.Atualizacoes = s.cleanText(atuVal)
+	}
+	
+	if dataAssVal, ok := item["DataAssinatura"].(string); ok {
+		norma.DataAssinatura = s.cleanText(dataAssVal)
+	}
+	
+	if votoVal, ok := item["Voto"].(string); ok {
+		norma.Voto = s.cleanText(votoVal)
+	}
+	
+	if versaoVal, ok := item["VersaoNormativo"].(string); ok {
+		norma.VersaoNormativo = s.cleanText(versaoVal)
+	}
+	
+	return norma.Texto
 }
 
 // processNormas persists a batch of scraped normas concurrently, mirroring each
@@ -441,11 +500,11 @@ func (s *Scraper) processNorma(n models.Norma) {
 		return
 	}
 
-	if n.Texto == "" {
+	if n.Texto == "" || n.Documentos != "" || n.DOU != "" || n.NormasVinculadas != "" || n.Referencias != "" || n.Atualizacoes != "" {
 		n.Texto = s.FetchText(&n)
-		if n.Texto != "" {
+		if n.Texto != "" || n.Documentos != "" || n.DOU != "" || n.NormasVinculadas != "" || n.Referencias != "" || n.Atualizacoes != "" {
 			if err := s.storage.SaveNorma(&n); err != nil {
-				s.logger.WithError(err).Warn("Failed to save norma text")
+				s.logger.WithError(err).Warn("Failed to save norma text/fields")
 			}
 		}
 	}

@@ -312,11 +312,20 @@ func compareNormas(label string, a, b models.Norma) []string {
 		{"DataPublicacao", scraper.FormatDateTime(a.DataPublicacao), scraper.FormatDateTime(b.DataPublicacao)},
 		{"DataVigencia", scraper.FormatDateTime(a.DataVigencia), scraper.FormatDateTime(b.DataVigencia)},
 		{"URL", normalizeURL(a.URL), normalizeURL(b.URL)},
+		{"TextoURL", normalizeURL(a.TextoURL), normalizeURL(b.TextoURL)},
 		{"Situacao", a.Situacao, b.Situacao},
 		{"Assunto", a.Assunto, b.Assunto},
 		{"Sumario", a.Sumario, b.Sumario},
 		{"Texto", a.Texto, b.Texto},
 		{"ArquivoPDF", a.ArquivoPDF, b.ArquivoPDF},
+		{"Documentos", a.Documentos, b.Documentos},
+		{"DOU", a.DOU, b.DOU},
+		{"NormasVinculadas", a.NormasVinculadas, b.NormasVinculadas},
+		{"Referencias", a.Referencias, b.Referencias},
+		{"Atualizacoes", a.Atualizacoes, b.Atualizacoes},
+		{"DataAssinatura", a.DataAssinatura, b.DataAssinatura},
+		{"Voto", a.Voto, b.Voto},
+		{"VersaoNormativo", a.VersaoNormativo, b.VersaoNormativo},
 	}
 
 	for _, f := range fields {

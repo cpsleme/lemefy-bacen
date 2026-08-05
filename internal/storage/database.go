@@ -82,11 +82,20 @@ func (db *Database) InitSchema() error {
 		data_publicacao TEXT NOT NULL,
 		data_vigencia TEXT NOT NULL,
 		url TEXT UNIQUE NOT NULL,
+		texto_url TEXT,
 		situacao TEXT NOT NULL DEFAULT 'Vigente',
 		assunto TEXT,
 		sumario TEXT,
 		texto TEXT,
 		arquivo_pdf TEXT,
+		documentos TEXT,
+		dou TEXT,
+		normas_vinculadas TEXT,
+		referencias TEXT,
+		atualizacoes TEXT,
+		data_assinatura TEXT,
+		voto TEXT,
+		versao_normativo TEXT,
 		created_at TEXT NOT NULL DEFAULT (datetime('now')),
 		updated_at TEXT NOT NULL DEFAULT (datetime('now')),
 		UNIQUE(numero, tipo, data_publicacao)
@@ -141,13 +150,15 @@ func (db *Database) SaveNorma(norma *models.Norma) error {
 	var existingID int64
 	var existingNorma models.Norma
 	err := db.conn.QueryRow(
-		"SELECT id, numero, tipo, titulo, data_publicacao, data_vigencia, url, situacao, assunto, sumario, COALESCE(texto, ''), arquivo_pdf, created_at, updated_at FROM normas WHERE url = ?",
+		"SELECT id, numero, tipo, titulo, data_publicacao, data_vigencia, url, texto_url, situacao, assunto, sumario, COALESCE(texto, ''), arquivo_pdf, COALESCE(documentos, ''), COALESCE(dou, ''), COALESCE(normas_vinculadas, ''), COALESCE(referencias, ''), COALESCE(atualizacoes, ''), COALESCE(data_assinatura, ''), COALESCE(voto, ''), COALESCE(versao_normativo, ''), created_at, updated_at FROM normas WHERE url = ?",
 		norma.URL,
 	).Scan(
 		&existingID, &existingNorma.Numero, &existingNorma.Tipo, &existingNorma.Titulo,
 		&existingNorma.DataPublicacao, &existingNorma.DataVigencia, &existingNorma.URL,
-		&existingNorma.Situacao, &existingNorma.Assunto, &existingNorma.Sumario, &existingNorma.Texto,
-		&existingNorma.ArquivoPDF, &existingNorma.CreatedAt, &existingNorma.UpdatedAt,
+		&existingNorma.TextoURL, &existingNorma.Situacao, &existingNorma.Assunto, &existingNorma.Sumario, &existingNorma.Texto,
+		&existingNorma.ArquivoPDF, &existingNorma.Documentos, &existingNorma.DOU, &existingNorma.NormasVinculadas,
+		&existingNorma.Referencias, &existingNorma.Atualizacoes, &existingNorma.DataAssinatura, &existingNorma.Voto, &existingNorma.VersaoNormativo,
+		&existingNorma.CreatedAt, &existingNorma.UpdatedAt,
 	)
 
 	if err != nil && err != sql.ErrNoRows {
@@ -159,9 +170,11 @@ func (db *Database) SaveNorma(norma *models.Norma) error {
 	if existingID > 0 {
 		// Update existing norma
 		_, err = db.conn.Exec(
-			"UPDATE normas SET numero = ?, tipo = ?, titulo = ?, data_publicacao = ?, data_vigencia = ?, situacao = ?, assunto = ?, sumario = ?, texto = ?, arquivo_pdf = ?, updated_at = ? WHERE id = ?",
+			"UPDATE normas SET numero = ?, tipo = ?, titulo = ?, data_publicacao = ?, data_vigencia = ?, texto_url = ?, situacao = ?, assunto = ?, sumario = ?, texto = ?, arquivo_pdf = ?, documentos = ?, dou = ?, normas_vinculadas = ?, referencias = ?, atualizacoes = ?, data_assinatura = ?, voto = ?, versao_normativo = ?, updated_at = ? WHERE id = ?",
 			norma.Numero, string(norma.Tipo), norma.Titulo, norma.DataPublicacao, norma.DataVigencia,
-			norma.Situacao, norma.Assunto, norma.Sumario, norma.Texto, norma.ArquivoPDF, now, existingID,
+			norma.TextoURL, norma.Situacao, norma.Assunto, norma.Sumario, norma.Texto, norma.ArquivoPDF,
+			norma.Documentos, norma.DOU, norma.NormasVinculadas, norma.Referencias, norma.Atualizacoes,
+			norma.DataAssinatura, norma.Voto, norma.VersaoNormativo, now, existingID,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to update norma: %w", err)
@@ -171,9 +184,11 @@ func (db *Database) SaveNorma(norma *models.Norma) error {
 	} else {
 		// Insert new norma
 		result, err := db.conn.Exec(
-			"INSERT INTO normas (numero, tipo, titulo, data_publicacao, data_vigencia, url, situacao, assunto, sumario, texto, arquivo_pdf, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			"INSERT INTO normas (numero, tipo, titulo, data_publicacao, data_vigencia, url, texto_url, situacao, assunto, sumario, texto, arquivo_pdf, documentos, dou, normas_vinculadas, referencias, atualizacoes, data_assinatura, voto, versao_normativo, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 			norma.Numero, string(norma.Tipo), norma.Titulo, norma.DataPublicacao, norma.DataVigencia,
-			norma.URL, norma.Situacao, norma.Assunto, norma.Sumario, norma.Texto, norma.ArquivoPDF,
+			norma.URL, norma.TextoURL, norma.Situacao, norma.Assunto, norma.Sumario, norma.Texto, norma.ArquivoPDF,
+			norma.Documentos, norma.DOU, norma.NormasVinculadas, norma.Referencias, norma.Atualizacoes,
+			norma.DataAssinatura, norma.Voto, norma.VersaoNormativo,
 			now, now,
 		)
 		if err != nil {
@@ -196,13 +211,15 @@ func (db *Database) SaveNorma(norma *models.Norma) error {
 func (db *Database) GetNormaByID(id int64) (*models.Norma, error) {
 	var norma models.Norma
 	err := db.conn.QueryRow(
-		"SELECT id, numero, tipo, titulo, data_publicacao, data_vigencia, url, situacao, assunto, sumario, COALESCE(texto, ''), arquivo_pdf, created_at, updated_at FROM normas WHERE id = ?",
+		"SELECT id, numero, tipo, titulo, data_publicacao, data_vigencia, url, texto_url, situacao, assunto, sumario, COALESCE(texto, ''), arquivo_pdf, COALESCE(documentos, ''), COALESCE(dou, ''), COALESCE(normas_vinculadas, ''), COALESCE(referencias, ''), COALESCE(atualizacoes, ''), COALESCE(data_assinatura, ''), COALESCE(voto, ''), COALESCE(versao_normativo, ''), created_at, updated_at FROM normas WHERE id = ?",
 		id,
 	).Scan(
 		&norma.ID, &norma.Numero, &norma.Tipo, &norma.Titulo,
 		&norma.DataPublicacao, &norma.DataVigencia, &norma.URL,
-		&norma.Situacao, &norma.Assunto, &norma.Sumario, &norma.Texto,
-		&norma.ArquivoPDF, &norma.CreatedAt, &norma.UpdatedAt,
+		&norma.TextoURL, &norma.Situacao, &norma.Assunto, &norma.Sumario, &norma.Texto,
+		&norma.ArquivoPDF, &norma.Documentos, &norma.DOU, &norma.NormasVinculadas,
+		&norma.Referencias, &norma.Atualizacoes, &norma.DataAssinatura, &norma.Voto, &norma.VersaoNormativo,
+		&norma.CreatedAt, &norma.UpdatedAt,
 	)
 
 	if err != nil {
@@ -219,13 +236,15 @@ func (db *Database) GetNormaByID(id int64) (*models.Norma, error) {
 func (db *Database) GetNormaByURL(url string) (*models.Norma, error) {
 	var norma models.Norma
 	err := db.conn.QueryRow(
-		"SELECT id, numero, tipo, titulo, data_publicacao, data_vigencia, url, situacao, assunto, sumario, COALESCE(texto, ''), arquivo_pdf, created_at, updated_at FROM normas WHERE url = ?",
+		"SELECT id, numero, tipo, titulo, data_publicacao, data_vigencia, url, texto_url, situacao, assunto, sumario, COALESCE(texto, ''), arquivo_pdf, COALESCE(documentos, ''), COALESCE(dou, ''), COALESCE(normas_vinculadas, ''), COALESCE(referencias, ''), COALESCE(atualizacoes, ''), COALESCE(data_assinatura, ''), COALESCE(voto, ''), COALESCE(versao_normativo, ''), created_at, updated_at FROM normas WHERE url = ?",
 		url,
 	).Scan(
 		&norma.ID, &norma.Numero, &norma.Tipo, &norma.Titulo,
 		&norma.DataPublicacao, &norma.DataVigencia, &norma.URL,
-		&norma.Situacao, &norma.Assunto, &norma.Sumario, &norma.Texto,
-		&norma.ArquivoPDF, &norma.CreatedAt, &norma.UpdatedAt,
+		&norma.TextoURL, &norma.Situacao, &norma.Assunto, &norma.Sumario, &norma.Texto,
+		&norma.ArquivoPDF, &norma.Documentos, &norma.DOU, &norma.NormasVinculadas,
+		&norma.Referencias, &norma.Atualizacoes, &norma.DataAssinatura, &norma.Voto, &norma.VersaoNormativo,
+		&norma.CreatedAt, &norma.UpdatedAt,
 	)
 
 	if err != nil {
@@ -240,7 +259,7 @@ func (db *Database) GetNormaByURL(url string) (*models.Norma, error) {
 
 // ListNormas retrieves normas with optional filters
 func (db *Database) ListNormas(search *models.NormaSearch) ([]models.Norma, int, error) {
-	query := "SELECT id, numero, tipo, titulo, data_publicacao, data_vigencia, url, situacao, assunto, sumario, COALESCE(texto, ''), arquivo_pdf, created_at, updated_at FROM normas"
+	query := "SELECT id, numero, tipo, titulo, data_publicacao, data_vigencia, url, texto_url, situacao, assunto, sumario, COALESCE(texto, ''), arquivo_pdf, COALESCE(documentos, ''), COALESCE(dou, ''), COALESCE(normas_vinculadas, ''), COALESCE(referencias, ''), COALESCE(atualizacoes, ''), COALESCE(data_assinatura, ''), COALESCE(voto, ''), COALESCE(versao_normativo, ''), created_at, updated_at FROM normas"
 	var conditions []string
 	var args []interface{}
 
@@ -315,8 +334,10 @@ func (db *Database) ListNormas(search *models.NormaSearch) ([]models.Norma, int,
 		err := rows.Scan(
 			&norma.ID, &norma.Numero, &norma.Tipo, &norma.Titulo,
 			&norma.DataPublicacao, &norma.DataVigencia, &norma.URL,
-			&norma.Situacao, &norma.Assunto, &norma.Sumario, &norma.Texto,
-			&norma.ArquivoPDF, &norma.CreatedAt, &norma.UpdatedAt,
+			&norma.TextoURL, &norma.Situacao, &norma.Assunto, &norma.Sumario, &norma.Texto,
+			&norma.ArquivoPDF, &norma.Documentos, &norma.DOU, &norma.NormasVinculadas,
+			&norma.Referencias, &norma.Atualizacoes, &norma.DataAssinatura, &norma.Voto, &norma.VersaoNormativo,
+			&norma.CreatedAt, &norma.UpdatedAt,
 		)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to scan norma: %w", err)
@@ -502,7 +523,7 @@ func (db *Database) GetNormaCountByDate() (map[string]int, error) {
 // an initial bulk load into the search index.
 func (db *Database) GetAllNormas() ([]models.Norma, error) {
 	rows, err := db.conn.Query(
-		"SELECT id, numero, tipo, titulo, data_publicacao, data_vigencia, url, situacao, assunto, sumario, COALESCE(texto, ''), arquivo_pdf, created_at, updated_at FROM normas",
+		"SELECT id, numero, tipo, titulo, data_publicacao, data_vigencia, url, texto_url, situacao, assunto, sumario, COALESCE(texto, ''), arquivo_pdf, COALESCE(documentos, ''), COALESCE(dou, ''), COALESCE(normas_vinculadas, ''), COALESCE(referencias, ''), COALESCE(atualizacoes, ''), COALESCE(data_assinatura, ''), COALESCE(voto, ''), COALESCE(versao_normativo, ''), created_at, updated_at FROM normas",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query all normas: %w", err)
@@ -515,8 +536,10 @@ func (db *Database) GetAllNormas() ([]models.Norma, error) {
 		if err := rows.Scan(
 			&norma.ID, &norma.Numero, &norma.Tipo, &norma.Titulo,
 			&norma.DataPublicacao, &norma.DataVigencia, &norma.URL,
-			&norma.Situacao, &norma.Assunto, &norma.Sumario, &norma.Texto,
-			&norma.ArquivoPDF, &norma.CreatedAt, &norma.UpdatedAt,
+			&norma.TextoURL, &norma.Situacao, &norma.Assunto, &norma.Sumario, &norma.Texto,
+			&norma.ArquivoPDF, &norma.Documentos, &norma.DOU, &norma.NormasVinculadas,
+			&norma.Referencias, &norma.Atualizacoes, &norma.DataAssinatura, &norma.Voto, &norma.VersaoNormativo,
+			&norma.CreatedAt, &norma.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan norma: %w", err)
 		}

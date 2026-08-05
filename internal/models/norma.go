@@ -18,20 +18,29 @@ const (
 
 // Norma representa uma norma do Banco Central do Brasil
 type Norma struct {
-	ID            int64     `json:"id" db:"id"`
-	Numero        string    `json:"numero" db:"numero"`
-	Tipo          TipoNorma  `json:"tipo" db:"tipo"`
-	Titulo        string    `json:"titulo" db:"titulo"`
-	DataPublicacao string    `json:"data_publicacao" db:"data_publicacao"`
-	DataVigencia  string    `json:"data_vigencia" db:"data_vigencia"`
-	URL           string    `json:"url" db:"url"`
-	Situacao      string    `json:"situacao" db:"situacao"`
-	Assunto       string    `json:"assunto" db:"assunto"`
-	Sumario       string    `json:"sumario" db:"sumario"`
-	Texto         string    `json:"texto" db:"texto"`
-	ArquivoPDF    string    `json:"arquivo_pdf" db:"arquivo_pdf"`
-	CreatedAt     string    `json:"created_at" db:"created_at"`
-	UpdatedAt     string    `json:"updated_at" db:"updated_at"`
+	ID              int64     `json:"id" db:"id"`
+	Numero          string    `json:"numero" db:"numero"`
+	Tipo            TipoNorma  `json:"tipo" db:"tipo"`
+	Titulo          string    `json:"titulo" db:"titulo"`
+	DataPublicacao  string    `json:"data_publicacao" db:"data_publicacao"`
+	DataVigencia    string    `json:"data_vigencia" db:"data_vigencia"`
+	URL             string    `json:"url" db:"url"`
+	TextoURL        string    `json:"texto_url" db:"texto_url"`
+	Situacao        string    `json:"situacao" db:"situacao"`
+	Assunto         string    `json:"assunto" db:"assunto"`
+	Sumario         string    `json:"sumario" db:"sumario"`
+	Texto           string    `json:"texto" db:"texto"`
+	ArquivoPDF      string    `json:"arquivo_pdf" db:"arquivo_pdf"`
+	Documentos      string    `json:"documentos" db:"documentos"`
+	DOU             string    `json:"dou" db:"dou"`
+	NormasVinculadas string   `json:"normas_vinculadas" db:"normas_vinculadas"`
+	Referencias     string    `json:"referencias" db:"referencias"`
+	Atualizacoes    string    `json:"atualizacoes" db:"atualizacoes"`
+	DataAssinatura  string    `json:"data_assinatura" db:"data_assinatura"`
+	Voto            string    `json:"voto" db:"voto"`
+	VersaoNormativo string    `json:"versao_normativo" db:"versao_normativo"`
+	CreatedAt       string    `json:"created_at" db:"created_at"`
+	UpdatedAt       string    `json:"updated_at" db:"updated_at"`
 }
 
 // NormaSearch represent search criteria for normas

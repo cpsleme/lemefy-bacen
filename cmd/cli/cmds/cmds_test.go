@@ -40,8 +40,8 @@ func TestNewRootCmd(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("NewRootCmd returned nil")
 	}
-	if cmd.Use != "lemefy-bacen" {
-		t.Errorf("expected Use 'lemefy-bacen', got %s", cmd.Use)
+	if cmd.Use != "bacen" {
+		t.Errorf("expected Use 'bacen', got %s", cmd.Use)
 	}
 }
 
