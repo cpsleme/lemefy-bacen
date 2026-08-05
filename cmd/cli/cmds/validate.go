@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -309,8 +310,8 @@ func compareNormas(label string, a, b models.Norma) []string {
 		{"Numero", a.Numero, b.Numero},
 		{"Tipo", string(a.Tipo), string(b.Tipo)},
 		{"Titulo", a.Titulo, b.Titulo},
-		{"DataPublicacao", scraper.FormatDateTime(a.DataPublicacao), scraper.FormatDateTime(b.DataPublicacao)},
-		{"DataVigencia", scraper.FormatDateTime(a.DataVigencia), scraper.FormatDateTime(b.DataVigencia)},
+		{"DataPublicacao", scraper.FormatDate(a.DataPublicacao), scraper.FormatDate(b.DataPublicacao)},
+		{"DataVigencia", scraper.FormatDate(a.DataVigencia), scraper.FormatDate(b.DataVigencia)},
 		{"URL", normalizeURL(a.URL), normalizeURL(b.URL)},
 		{"TextoURL", normalizeURL(a.TextoURL), normalizeURL(b.TextoURL)},
 		{"Situacao", a.Situacao, b.Situacao},
@@ -318,10 +319,7 @@ func compareNormas(label string, a, b models.Norma) []string {
 		{"Sumario", a.Sumario, b.Sumario},
 		{"Texto", a.Texto, b.Texto},
 		{"ArquivoPDF", a.ArquivoPDF, b.ArquivoPDF},
-		{"Documentos", a.Documentos, b.Documentos},
 		{"DOU", a.DOU, b.DOU},
-		{"NormasVinculadas", a.NormasVinculadas, b.NormasVinculadas},
-		{"Referencias", a.Referencias, b.Referencias},
 		{"Atualizacoes", a.Atualizacoes, b.Atualizacoes},
 		{"DataAssinatura", a.DataAssinatura, b.DataAssinatura},
 		{"Voto", a.Voto, b.Voto},
@@ -332,6 +330,16 @@ func compareNormas(label string, a, b models.Norma) []string {
 		if f.av != f.bv {
 			diffs = append(diffs, fmt.Sprintf("[%s] %s: %q != %q", label, f.name, truncate(f.av, 120), truncate(f.bv, 120)))
 		}
+	}
+
+	if !slices.EqualFunc(a.Documentos, b.Documentos, func(a, b models.DocumentoPDF) bool { return a.Equal(b) }) {
+		diffs = append(diffs, fmt.Sprintf("[%s] Documentos: %d items != %d items", label, len(a.Documentos), len(b.Documentos)))
+	}
+	if !slices.EqualFunc(a.NormasVinculadas, b.NormasVinculadas, func(a, b models.NormaVinculada) bool { return a.Equal(b) }) {
+		diffs = append(diffs, fmt.Sprintf("[%s] NormasVinculadas: %d items != %d items", label, len(a.NormasVinculadas), len(b.NormasVinculadas)))
+	}
+	if !slices.EqualFunc(a.Referencias, b.Referencias, func(a, b models.Referencia) bool { return a == b }) {
+		diffs = append(diffs, fmt.Sprintf("[%s] Referencias: %d items != %d items", label, len(a.Referencias), len(b.Referencias)))
 	}
 
 	sort.Strings(diffs)

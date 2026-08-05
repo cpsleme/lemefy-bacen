@@ -59,12 +59,15 @@ type Scraper struct {
 	meili      *meilisearch.Client
 	logger     *logrus.Logger
 	httpClient *http.Client
+	contentClient *http.Client
 	maxPages   int
 	pageSize   int
 
 	wg   sync.WaitGroup
 	mu   sync.Mutex
 	stats ScraperStats
+
+	contentSemaphore chan struct{}
 }
 
 // ScraperStats represents scraper statistics
@@ -95,11 +98,13 @@ func NewScraper(cfg *config.Config, db *storage.Database) *Scraper {
 		storage:    db,
 		logger:     logger,
 		httpClient: &http.Client{Timeout: time.Duration(cfg.Scraper.Timeout) * time.Second},
+		contentClient: &http.Client{Timeout: 60 * time.Second},
 		maxPages:   maxPages,
 		pageSize:   pageSize,
 		stats: ScraperStats{
 			StartTime: time.Now(),
 		},
+		contentSemaphore: make(chan struct{}, 4),
 	}
 }
 
@@ -316,7 +321,7 @@ func (s *Scraper) MapRowToNorma(r ApiRow) (models.Norma, bool) {
 	if dataPub == "" {
 		dataPub = time.Now().UTC().Format(time.RFC3339)
 	}
-	dataPub = FormatDateTime(dataPub)
+	dataPub = FormatDate(dataPub)
 
 	situacao := "Vigente"
 	if strings.Contains(r.RevogadoOWSBOOL, "1") {
@@ -375,11 +380,91 @@ func contentEndpointFor(tipo models.TipoNorma) string {
 	}
 }
 
+// parseDocumentosPDF splits the BCB Documentos string into structured items.
+// Input format: "file.pdf;123#;file2.pdf;456#;"
+func parseDocumentosPDF(raw string) []models.DocumentoPDF {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ";")
+	var out []models.DocumentoPDF
+	for i := 0; i < len(parts); i += 2 {
+		nome := strings.TrimSpace(parts[i])
+		if nome == "" {
+			continue
+		}
+		id := ""
+		if i+1 < len(parts) {
+			id = strings.TrimSpace(parts[i+1])
+		}
+		out = append(out, models.DocumentoPDF{Nome: nome, ID: id})
+	}
+	return out
+}
+
+// parseNormasVinculadas splits the BCB NormasVinculadas string into structured items.
+// Input format: "TIPO;@NUMERO;@ANO;#TIPO2;@NUMERO2;@ANO2;#"
+func parseNormasVinculadas(raw string) []models.NormaVinculada {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, "#")
+	var out []models.NormaVinculada
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		fields := strings.Split(p, ";")
+		tipo := strings.TrimSpace(fields[0])
+		numero := ""
+		ano := ""
+		for _, f := range fields[1:] {
+			f = strings.TrimSpace(f)
+			if f == "" {
+				continue
+			}
+			if strings.HasPrefix(f, "@") {
+				if numero == "" {
+					numero = strings.TrimPrefix(f, "@")
+				} else if ano == "" {
+					ano = strings.TrimPrefix(f, "@")
+				}
+			}
+		}
+		out = append(out, models.NormaVinculada{Tipo: tipo, Numero: numero, Ano: ano})
+	}
+	return out
+}
+
+// parseReferencias splits the BCB Referencias string into structured items.
+// Input format: "texto da ref.;#outra ref.;#"
+func parseReferencias(raw string) []models.Referencia {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, "#")
+	var out []models.Referencia
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, models.Referencia(p))
+		}
+	}
+	return out
+}
+
 // FetchText fetches the full text of a norma from the BCB content API.
 func (s *Scraper) FetchText(norma *models.Norma) string {
 	if norma == nil {
 		return ""
 	}
+
+	s.contentSemaphore <- struct{}{}
+	defer func() { <-s.contentSemaphore }()
 
 	endpoint := contentEndpointFor(norma.Tipo)
 	u, err := url.Parse(endpoint)
@@ -401,7 +486,7 @@ func (s *Scraper) FetchText(norma *models.Norma) string {
 	req.Header.Set("User-Agent", s.config.Scraper.UserAgent)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := s.httpClient.Do(req)
+	resp, err := s.contentClient.Do(req)
 	if err != nil {
 		s.logger.WithError(err).Warn("Failed to fetch norma text from BCB")
 		return ""
@@ -440,7 +525,7 @@ func (s *Scraper) FetchText(norma *models.Norma) string {
 		if len(parts) >= 1 {
 			norma.ArquivoPDF = strings.TrimSpace(parts[0])
 		}
-		norma.Documentos = s.cleanText(docVal)
+		norma.Documentos = parseDocumentosPDF(docVal)
 	}
 	
 	if douVal, ok := item["DOU"].(string); ok {
@@ -452,11 +537,11 @@ func (s *Scraper) FetchText(norma *models.Norma) string {
 	}
 	
 	if normasVal, ok := item["NormasVinculadas"].(string); ok {
-		norma.NormasVinculadas = s.cleanText(normasVal)
+		norma.NormasVinculadas = parseNormasVinculadas(normasVal)
 	}
 	
 	if refVal, ok := item["Referencias"].(string); ok {
-		norma.Referencias = s.cleanText(refVal)
+		norma.Referencias = parseReferencias(refVal)
 	}
 	
 	if atuVal, ok := item["Atualizacoes"].(string); ok {
@@ -518,9 +603,9 @@ func (s *Scraper) processNorma(n models.Norma) {
 		return
 	}
 
-	if n.Texto == "" || n.Documentos != "" || n.DOU != "" || n.NormasVinculadas != "" || n.Referencias != "" || n.Atualizacoes != "" {
+	if n.Texto == "" {
 		n.Texto = s.FetchText(&n)
-		if n.Texto != "" || n.Documentos != "" || n.DOU != "" || n.NormasVinculadas != "" || n.Referencias != "" || n.Atualizacoes != "" {
+		if n.Texto != "" || n.ArquivoPDF != "" || n.DOU != "" || len(n.Documentos) > 0 || len(n.NormasVinculadas) > 0 || len(n.Referencias) > 0 || n.Atualizacoes != "" {
 			if err := s.storage.SaveNorma(&n); err != nil {
 				s.logger.WithError(err).Warn("Failed to save norma text/fields")
 			}
@@ -653,18 +738,15 @@ func EscapeTipo(t string) string {
 	return strings.ReplaceAll(strings.TrimSpace(t), `"`, `\"`)
 }
 
-// FormatDateTime normalizes a datetime string to a readable local-time format
-// without timezone info, e.g. "2026-08-04T21:50:51Z" -> "2026-08-04 21:50:51".
-func FormatDateTime(v string) string {
+// FormatDate normalizes a datetime string to a readable date-only format
+// without timezone info, e.g. "2026-08-04T21:50:51Z" -> "2026-08-04".
+func FormatDate(v string) string {
 	v = strings.TrimSpace(v)
 	if v == "" {
 		return v
 	}
-	v = strings.Replace(v, "T", " ", 1)
-	v = strings.TrimSuffix(v, "Z")
-	v = strings.TrimSpace(v)
-	if len(v) > 19 {
-		v = v[:19]
+	if len(v) >= 10 {
+		return v[:10]
 	}
 	return v
 }

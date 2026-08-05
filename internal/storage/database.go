@@ -2,6 +2,7 @@ package storage
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,6 +17,14 @@ import (
 type Database struct {
 	conn *sql.DB
 	path string
+}
+
+func unmarshalJSONString(raw string, v interface{}) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	return json.Unmarshal([]byte(raw), v)
 }
 
 // NewDatabase creates a new database instance
@@ -167,13 +176,17 @@ func (db *Database) SaveNorma(norma *models.Norma) error {
 
 	now := time.Now().UTC().Format(time.RFC3339)
 
+	documentosJSON, _ := json.Marshal(norma.Documentos)
+	normasVinculadasJSON, _ := json.Marshal(norma.NormasVinculadas)
+	referenciasJSON, _ := json.Marshal(norma.Referencias)
+
 	if existingID > 0 {
 		// Update existing norma
 		_, err = db.conn.Exec(
 			"UPDATE normas SET numero = ?, tipo = ?, titulo = ?, data_publicacao = ?, data_vigencia = ?, texto_url = ?, situacao = ?, assunto = ?, sumario = ?, texto = ?, arquivo_pdf = ?, documentos = ?, dou = ?, normas_vinculadas = ?, referencias = ?, atualizacoes = ?, data_assinatura = ?, voto = ?, versao_normativo = ?, updated_at = ? WHERE id = ?",
 			norma.Numero, string(norma.Tipo), norma.Titulo, norma.DataPublicacao, norma.DataVigencia,
 			norma.TextoURL, norma.Situacao, norma.Assunto, norma.Sumario, norma.Texto, norma.ArquivoPDF,
-			norma.Documentos, norma.DOU, norma.NormasVinculadas, norma.Referencias, norma.Atualizacoes,
+			string(documentosJSON), norma.DOU, string(normasVinculadasJSON), string(referenciasJSON), norma.Atualizacoes,
 			norma.DataAssinatura, norma.Voto, norma.VersaoNormativo, now, existingID,
 		)
 		if err != nil {
@@ -187,7 +200,7 @@ func (db *Database) SaveNorma(norma *models.Norma) error {
 			"INSERT INTO normas (numero, tipo, titulo, data_publicacao, data_vigencia, url, texto_url, situacao, assunto, sumario, texto, arquivo_pdf, documentos, dou, normas_vinculadas, referencias, atualizacoes, data_assinatura, voto, versao_normativo, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 			norma.Numero, string(norma.Tipo), norma.Titulo, norma.DataPublicacao, norma.DataVigencia,
 			norma.URL, norma.TextoURL, norma.Situacao, norma.Assunto, norma.Sumario, norma.Texto, norma.ArquivoPDF,
-			norma.Documentos, norma.DOU, norma.NormasVinculadas, norma.Referencias, norma.Atualizacoes,
+			string(documentosJSON), norma.DOU, string(normasVinculadasJSON), string(referenciasJSON), norma.Atualizacoes,
 			norma.DataAssinatura, norma.Voto, norma.VersaoNormativo,
 			now, now,
 		)
@@ -210,6 +223,7 @@ func (db *Database) SaveNorma(norma *models.Norma) error {
 // GetNormaByID retrieves a norma by ID
 func (db *Database) GetNormaByID(id int64) (*models.Norma, error) {
 	var norma models.Norma
+	var documentosJSON, normasVinculadasJSON, referenciasJSON string
 	err := db.conn.QueryRow(
 		"SELECT id, numero, tipo, titulo, data_publicacao, data_vigencia, url, texto_url, situacao, assunto, sumario, COALESCE(texto, ''), arquivo_pdf, COALESCE(documentos, ''), COALESCE(dou, ''), COALESCE(normas_vinculadas, ''), COALESCE(referencias, ''), COALESCE(atualizacoes, ''), COALESCE(data_assinatura, ''), COALESCE(voto, ''), COALESCE(versao_normativo, ''), created_at, updated_at FROM normas WHERE id = ?",
 		id,
@@ -217,8 +231,8 @@ func (db *Database) GetNormaByID(id int64) (*models.Norma, error) {
 		&norma.ID, &norma.Numero, &norma.Tipo, &norma.Titulo,
 		&norma.DataPublicacao, &norma.DataVigencia, &norma.URL,
 		&norma.TextoURL, &norma.Situacao, &norma.Assunto, &norma.Sumario, &norma.Texto,
-		&norma.ArquivoPDF, &norma.Documentos, &norma.DOU, &norma.NormasVinculadas,
-		&norma.Referencias, &norma.Atualizacoes, &norma.DataAssinatura, &norma.Voto, &norma.VersaoNormativo,
+		&norma.ArquivoPDF, &documentosJSON, &norma.DOU, &normasVinculadasJSON, &referenciasJSON,
+		&norma.Atualizacoes, &norma.DataAssinatura, &norma.Voto, &norma.VersaoNormativo,
 		&norma.CreatedAt, &norma.UpdatedAt,
 	)
 
@@ -229,12 +243,23 @@ func (db *Database) GetNormaByID(id int64) (*models.Norma, error) {
 		return nil, fmt.Errorf("failed to get norma by id: %w", err)
 	}
 
+	if err := unmarshalJSONString(documentosJSON, &norma.Documentos); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal documentos: %w", err)
+	}
+	if err := unmarshalJSONString(normasVinculadasJSON, &norma.NormasVinculadas); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal normas_vinculadas: %w", err)
+	}
+	if err := unmarshalJSONString(referenciasJSON, &norma.Referencias); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal referencias: %w", err)
+	}
+
 	return &norma, nil
 }
 
 // GetNormaByURL retrieves a norma by URL
 func (db *Database) GetNormaByURL(url string) (*models.Norma, error) {
 	var norma models.Norma
+	var documentosJSON, normasVinculadasJSON, referenciasJSON string
 	err := db.conn.QueryRow(
 		"SELECT id, numero, tipo, titulo, data_publicacao, data_vigencia, url, texto_url, situacao, assunto, sumario, COALESCE(texto, ''), arquivo_pdf, COALESCE(documentos, ''), COALESCE(dou, ''), COALESCE(normas_vinculadas, ''), COALESCE(referencias, ''), COALESCE(atualizacoes, ''), COALESCE(data_assinatura, ''), COALESCE(voto, ''), COALESCE(versao_normativo, ''), created_at, updated_at FROM normas WHERE url = ?",
 		url,
@@ -242,8 +267,8 @@ func (db *Database) GetNormaByURL(url string) (*models.Norma, error) {
 		&norma.ID, &norma.Numero, &norma.Tipo, &norma.Titulo,
 		&norma.DataPublicacao, &norma.DataVigencia, &norma.URL,
 		&norma.TextoURL, &norma.Situacao, &norma.Assunto, &norma.Sumario, &norma.Texto,
-		&norma.ArquivoPDF, &norma.Documentos, &norma.DOU, &norma.NormasVinculadas,
-		&norma.Referencias, &norma.Atualizacoes, &norma.DataAssinatura, &norma.Voto, &norma.VersaoNormativo,
+		&norma.ArquivoPDF, &documentosJSON, &norma.DOU, &normasVinculadasJSON, &referenciasJSON,
+		&norma.Atualizacoes, &norma.DataAssinatura, &norma.Voto, &norma.VersaoNormativo,
 		&norma.CreatedAt, &norma.UpdatedAt,
 	)
 
@@ -252,6 +277,16 @@ func (db *Database) GetNormaByURL(url string) (*models.Norma, error) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to get norma by url: %w", err)
+	}
+
+	if err := unmarshalJSONString(documentosJSON, &norma.Documentos); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal documentos: %w", err)
+	}
+	if err := unmarshalJSONString(normasVinculadasJSON, &norma.NormasVinculadas); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal normas_vinculadas: %w", err)
+	}
+	if err := unmarshalJSONString(referenciasJSON, &norma.Referencias); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal referencias: %w", err)
 	}
 
 	return &norma, nil
@@ -331,16 +366,27 @@ func (db *Database) ListNormas(search *models.NormaSearch) ([]models.Norma, int,
 	var normas []models.Norma
 	for rows.Next() {
 		var norma models.Norma
+		var documentosJSON, normasVinculadasJSON, referenciasJSON string
 		err := rows.Scan(
 			&norma.ID, &norma.Numero, &norma.Tipo, &norma.Titulo,
 			&norma.DataPublicacao, &norma.DataVigencia, &norma.URL,
 			&norma.TextoURL, &norma.Situacao, &norma.Assunto, &norma.Sumario, &norma.Texto,
-			&norma.ArquivoPDF, &norma.Documentos, &norma.DOU, &norma.NormasVinculadas,
-			&norma.Referencias, &norma.Atualizacoes, &norma.DataAssinatura, &norma.Voto, &norma.VersaoNormativo,
+			&norma.ArquivoPDF, &documentosJSON, &norma.DOU, &normasVinculadasJSON, &referenciasJSON,
+			&norma.Atualizacoes, &norma.DataAssinatura, &norma.Voto, &norma.VersaoNormativo,
 			&norma.CreatedAt, &norma.UpdatedAt,
 		)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to scan norma: %w", err)
+		}
+
+		if err := unmarshalJSONString(documentosJSON, &norma.Documentos); err != nil {
+			return nil, 0, fmt.Errorf("failed to unmarshal documentos: %w", err)
+		}
+		if err := unmarshalJSONString(normasVinculadasJSON, &norma.NormasVinculadas); err != nil {
+			return nil, 0, fmt.Errorf("failed to unmarshal normas_vinculadas: %w", err)
+		}
+		if err := unmarshalJSONString(referenciasJSON, &norma.Referencias); err != nil {
+			return nil, 0, fmt.Errorf("failed to unmarshal referencias: %w", err)
 		}
 
 		normas = append(normas, norma)
@@ -533,16 +579,28 @@ func (db *Database) GetAllNormas() ([]models.Norma, error) {
 	var normas []models.Norma
 	for rows.Next() {
 		var norma models.Norma
+		var documentosJSON, normasVinculadasJSON, referenciasJSON string
 		if err := rows.Scan(
 			&norma.ID, &norma.Numero, &norma.Tipo, &norma.Titulo,
 			&norma.DataPublicacao, &norma.DataVigencia, &norma.URL,
 			&norma.TextoURL, &norma.Situacao, &norma.Assunto, &norma.Sumario, &norma.Texto,
-			&norma.ArquivoPDF, &norma.Documentos, &norma.DOU, &norma.NormasVinculadas,
-			&norma.Referencias, &norma.Atualizacoes, &norma.DataAssinatura, &norma.Voto, &norma.VersaoNormativo,
+			&norma.ArquivoPDF, &documentosJSON, &norma.DOU, &normasVinculadasJSON, &referenciasJSON,
+			&norma.Atualizacoes, &norma.DataAssinatura, &norma.Voto, &norma.VersaoNormativo,
 			&norma.CreatedAt, &norma.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan norma: %w", err)
 		}
+
+		if err := unmarshalJSONString(documentosJSON, &norma.Documentos); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal documentos: %w", err)
+		}
+		if err := unmarshalJSONString(normasVinculadasJSON, &norma.NormasVinculadas); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal normas_vinculadas: %w", err)
+		}
+		if err := unmarshalJSONString(referenciasJSON, &norma.Referencias); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal referencias: %w", err)
+		}
+
 		normas = append(normas, norma)
 	}
 
