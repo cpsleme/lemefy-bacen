@@ -154,6 +154,8 @@ lemfey-bacen/
 │   │       ├── scrape.go
 │   │       ├── serve.go
 │   │       ├── stats.go
+│   │       ├── validate.go
+│   │       ├── vigentes.go
 │   │       └── version.go
 │   └── scraper/      # Original server entry point
 │       └── main.go

@@ -28,6 +28,7 @@ type Norma struct {
 	Situacao      string    `json:"situacao" db:"situacao"`
 	Assunto       string    `json:"assunto" db:"assunto"`
 	Sumario       string    `json:"sumario" db:"sumario"`
+	Texto         string    `json:"texto" db:"texto"`
 	ArquivoPDF    string    `json:"arquivo_pdf" db:"arquivo_pdf"`
 	CreatedAt     string    `json:"created_at" db:"created_at"`
 	UpdatedAt     string    `json:"updated_at" db:"updated_at"`

@@ -3,6 +3,7 @@ package meilisearch
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -147,6 +148,8 @@ func (c *Client) healthCheck() bool {
 }
 
 // createIndex creates a single index (idempotent against index_already_exists).
+// Creation is asynchronous in Meilisearch, so the returned task is awaited to
+// guarantee the index exists before callers try to write documents to it.
 func (c *Client) createIndex(uid string) error {
 	body, _ := json.Marshal(map[string]string{
 		"uid":        uid,
@@ -157,33 +160,87 @@ func (c *Client) createIndex(uid string) error {
 		return fmt.Errorf("failed to create index %s: %w", uid, err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusBadRequest {
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read create-index response for %s: %w", uid, err)
+	}
+	if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusConflict {
 		var errBody struct {
 			Code string `json:"code"`
 		}
-		if json.NewDecoder(resp.Body).Decode(&errBody) == nil && errBody.Code == "index_already_exists" {
+		if json.Unmarshal(respBytes, &errBody) == nil && errBody.Code == "index_already_exists" {
 			return nil
 		}
 	}
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		var task struct {
+			TaskUID string `json:"taskUid"`
+		}
+		_ = json.Unmarshal(respBytes, &task)
+		if task.TaskUID != "" {
+			if err := c.awaitTask(task.TaskUID); err != nil {
+				return fmt.Errorf("index %s creation: %w", uid, err)
+			}
+		}
 		return nil
 	}
-	respBody, _ := io.ReadAll(resp.Body)
-	return fmt.Errorf("meilisearch index creation failed for %s with status %d: %s", uid, resp.StatusCode, string(respBody))
+	return fmt.Errorf("meilisearch index creation failed for %s with status %d: %s", uid, resp.StatusCode, string(respBytes))
+}
+
+// awaitTask polls a Meilisearch asynchronous task until it finishes, returning
+// nil on success or an error if the task fails or does not complete in time.
+func (c *Client) awaitTask(taskUID string) error {
+	if taskUID == "" {
+		return nil
+	}
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := c.request(http.MethodGet, "/tasks/"+url.PathEscape(taskUID), nil)
+		if err != nil {
+			return err
+		}
+		var t struct {
+			Status string         `json:"status"`
+			Error  map[string]any `json:"error"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&t); err != nil {
+			resp.Body.Close()
+			return fmt.Errorf("failed to decode task %s status: %w", taskUID, err)
+		}
+		resp.Body.Close()
+		switch t.Status {
+		case "succeeded":
+			return nil
+		case "failed":
+			if t.Error != nil {
+				return fmt.Errorf("meilisearch task %s failed: %v", taskUID, t.Error["message"])
+			}
+			return fmt.Errorf("meilisearch task %s failed", taskUID)
+		default:
+			time.Sleep(300 * time.Millisecond)
+		}
+	}
+	return fmt.Errorf("meilisearch task %s did not complete within 60s", taskUID)
 }
 
 // EnsureIndex creates one index per collected tipo. Creating an index whose uid
-// already exists is a no-op, so this is safe to call on every startup.
+// already exists is a no-op (Meilisearch returns index_already_exists, which is
+// handled), so this is safe to call on every startup. A failure on one index is
+// logged and skipped rather than aborting the whole set, so a single flaky index
+// never blocks the others from being created or bulk-loaded.
 func (c *Client) EnsureIndex() error {
 	if !c.available {
 		return nil
 	}
+	var errs []error
 	for _, t := range allNormaTipos() {
-		if err := c.createIndex(c.IndexFor(t)); err != nil {
-			return err
+		uid := c.IndexFor(t)
+		if err := c.createIndex(uid); err != nil {
+			c.logger.WithError(err).Warnf("Failed to ensure index %s", uid)
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // IndexNorma upserts a single norma document into its target index (best effort).
@@ -232,10 +289,21 @@ func (c *Client) IndexNormas(normas []models.Norma) error {
 		if err != nil {
 			return fmt.Errorf("failed to batch index normas into %s: %w", uid, err)
 		}
+		respBytes, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		if err != nil {
+			return fmt.Errorf("failed to read batch index response for %s: %w", uid, err)
+		}
 		if resp.StatusCode >= 300 {
-			respBody, _ := io.ReadAll(resp.Body)
-			return fmt.Errorf("meilisearch batch index failed for %s (status %d): %s", uid, resp.StatusCode, string(respBody))
+			return fmt.Errorf("meilisearch batch index failed for %s (status %d): %s", uid, resp.StatusCode, string(respBytes))
+		}
+		var task struct {
+			TaskUID string `json:"taskUid"`
+		}
+		if json.Unmarshal(respBytes, &task) == nil && task.TaskUID != "" {
+			if err := c.awaitTask(task.TaskUID); err != nil {
+				return fmt.Errorf("meilisearch batch index %s: %w", uid, err)
+			}
 		}
 	}
 	return nil

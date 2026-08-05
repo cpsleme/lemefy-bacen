@@ -38,7 +38,7 @@ func runVersion() error {
 		return outputJSON(info)
 	}
 
-	fmt.Printf("lemefy-bacen %s\n", version)
+	fmt.Printf("bacen %s\n", version)
 	fmt.Printf("Go %s (%s/%s)\n", runtime.Version(), runtime.GOOS, runtime.GOARCH)
 	if date != "" {
 		fmt.Printf("Build date: %s\n", date)

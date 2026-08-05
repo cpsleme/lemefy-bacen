@@ -11,14 +11,24 @@ func TestNormalizeTipo(t *testing.T) {
 		input string
 		want  models.TipoNorma
 	}{
+		// Resoluções carry an "esfera" suffix in the API; all must classify as
+		// Resolução.
 		{"Resolução", models.TipoResolucao},
+		{"Resolução CMN", models.TipoResolucao},
+		{"Resolução BCB", models.TipoResolucao},
+		{"Resolução Conjunta", models.TipoResolucao},
+		{"Resolução Coseg", models.TipoResolucao},
 		{"Circular", models.TipoCircular},
+		// The BCB API returns the short tipo as "Instrução Normativa BCB".
 		{"Instrução", models.TipoInstrucao},
+		{"Instrução Normativa BCB", models.TipoInstrucao},
 		{"Comunicado", models.TipoComunicado},
-		// The BCB API spells this with a space, while the domain type uses a hyphen.
+		// The BCB API spells "Carta-Circular" as "Carta Circular" (space), while the
+		// model uses a hyphen; both spellings must be recognized.
 		{"Carta Circular", models.TipoCartaCircular},
 		{"Carta-Circular", models.TipoCartaCircular},
 		{"Ato de Diretor", models.TipoOutros},
+		{"Ato do Presidente", models.TipoOutros},
 		{"Outros", models.TipoOutros},
 		{"", models.TipoOutros},
 	}
@@ -35,17 +45,17 @@ func TestAPITipoFor(t *testing.T) {
 		tipo models.TipoNorma
 		want string
 	}{
-		{models.TipoResolucao, "Resolução"},
+		{models.TipoResolucao, "Resolução*"},
 		{models.TipoCircular, "Circular"},
-		{models.TipoInstrucao, "Instrução"},
+		{models.TipoInstrucao, "Instrução*"},
 		{models.TipoComunicado, "Comunicado"},
 		{models.TipoCartaCircular, "Carta Circular"},
 		{models.TipoOutros, "Outros"},
 	}
 	for _, tc := range cases {
-		got := apiTipoFor(tc.tipo)
+		got := ApiTipoFor(tc.tipo)
 		if got != tc.want {
-			t.Errorf("apiTipoFor(%q) = %q, want %q", tc.tipo, got, tc.want)
+			t.Errorf("ApiTipoFor(%q) = %q, want %q", tc.tipo, got, tc.want)
 		}
 	}
 }
@@ -78,9 +88,9 @@ func TestParseNumero(t *testing.T) {
 		{"", ""},
 	}
 	for _, tc := range cases {
-		got := parseNumero(tc.in)
+		got := ParseNumero(tc.in)
 		if got != tc.want {
-			t.Errorf("parseNumero(%q) = %q, want %q", tc.in, got, tc.want)
+			t.Errorf("ParseNumero(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }

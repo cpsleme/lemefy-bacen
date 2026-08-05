@@ -33,13 +33,13 @@ const (
 type apiResponse struct {
 	TotalRows int      `json:"TotalRows"`
 	RowCount  int      `json:"RowCount"`
-	Rows      []apiRow `json:"Rows"`
+	Rows      []ApiRow `json:"Rows"`
 }
 
-// apiRow models a single search result row. Only the fields consumed by the
+// ApiRow models a single search result row. Only the fields consumed by the
 // scraper are mapped; the API returns many others (e.g. listItemId) with
 // inconsistent typing, which Go's strict decoder rejects.
-type apiRow struct {
+type ApiRow struct {
 	Title                   string `json:"title"`
 	TipodoNormativoOWSCHCS  string `json:"TipodoNormativoOWSCHCS"`
 	NumeroOWSNMBR           string `json:"NumeroOWSNMBR"`
@@ -160,7 +160,7 @@ func (s *Scraper) Run() error {
 
 // ScrapeByTipo scrapes norms filtered by a single norm type.
 func (s *Scraper) ScrapeByTipo(tipo models.TipoNorma) error {
-	query := fmt.Sprintf(`%s AND TipodoNormativoOWSCHCS="%s"`, s.baseQuery(), escapeTipo(apiTipoFor(tipo)))
+	query := fmt.Sprintf(`%s AND TipodoNormativoOWSCHCS="%s"`, s.baseQuery(), EscapeTipo(ApiTipoFor(tipo)))
 
 	s.resetStats()
 
@@ -229,7 +229,7 @@ func (s *Scraper) fetchNormas(querytext, refinement string, maxPages int) ([]mod
 			break
 		}
 		for _, row := range resp.Rows {
-			if n, ok := s.mapRowToNorma(row); ok {
+			if n, ok := s.MapRowToNorma(row); ok {
 				all = append(all, n)
 			}
 		}
@@ -283,7 +283,7 @@ func (s *Scraper) fetchPage(querytext string, startRow int) (apiResponse, error)
 // mapRowToNorma converts a raw BCB API row into a models.Norma, matching the
 // URL scheme and field formatting used by existing stored records so that
 // re-scraping upserts in place rather than creating duplicates.
-func (s *Scraper) mapRowToNorma(r apiRow) (models.Norma, bool) {
+func (s *Scraper) MapRowToNorma(r ApiRow) (models.Norma, bool) {
 	tipoParam := strings.TrimSpace(strings.TrimPrefix(r.RefinableString03, "string;#"))
 	if tipoParam == "" {
 		tipoParam = strings.TrimSpace(r.TipodoNormativoOWSCHCS)
@@ -292,7 +292,7 @@ func (s *Scraper) mapRowToNorma(r apiRow) (models.Norma, bool) {
 		return models.Norma{}, false
 	}
 
-	numero := parseNumero(r.NumeroOWSNMBR)
+	numero := ParseNumero(r.NumeroOWSNMBR)
 	if numero == "" {
 		return models.Norma{}, false
 	}
@@ -308,6 +308,7 @@ func (s *Scraper) mapRowToNorma(r apiRow) (models.Norma, bool) {
 	if dataPub == "" {
 		dataPub = time.Now().UTC().Format(time.RFC3339)
 	}
+	dataPub = FormatDateTime(dataPub)
 
 	situacao := "Vigente"
 	if strings.Contains(r.RevogadoOWSBOOL, "1") {
@@ -325,9 +326,79 @@ func (s *Scraper) mapRowToNorma(r apiRow) (models.Norma, bool) {
 		URL:            docURL,
 		Situacao:       situacao,
 		Assunto:        s.cleanText(r.AssuntoNormativoOWSMTXT),
-		Sumario:        s.cleanText(stripHTML(r.HitHighlightedSummary)),
+		Sumario:        s.cleanText(r.HitHighlightedSummary),
 		ArquivoPDF:     "",
+		Texto:          "",
 	}, true
+}
+
+// contentEndpointFor returns the BCB content API endpoint for a given tipo.
+func contentEndpointFor(tipo models.TipoNorma) string {
+	switch tipo {
+	case models.TipoComunicado:
+		return "https://www.bcb.gov.br/api/conteudo/app/normativos/exibeoutrasnormas"
+	default:
+		return "https://www.bcb.gov.br/api/conteudo/app/normativos/exibenormativo"
+	}
+}
+
+// FetchText fetches the full text of a norma from the BCB content API.
+func (s *Scraper) FetchText(norma *models.Norma) string {
+	if norma == nil {
+		return ""
+	}
+
+	endpoint := contentEndpointFor(norma.Tipo)
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		s.logger.WithError(err).Warn("Failed to parse content API endpoint")
+		return ""
+	}
+
+	q := u.Query()
+	q.Set("p1", ApiTipoFor(norma.Tipo))
+	q.Set("p2", norma.Numero)
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
+	if err != nil {
+		s.logger.WithError(err).Warn("Failed to create content API request")
+		return ""
+	}
+	req.Header.Set("User-Agent", s.config.Scraper.UserAgent)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		s.logger.WithError(err).Warn("Failed to fetch norma text from BCB")
+		return ""
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		s.logger.Warnf("BCB content API returned status %d for %s %s", resp.StatusCode, norma.Tipo, norma.Numero)
+		return ""
+	}
+
+	var contentResp struct {
+		Conteudo []struct {
+			Texto string `json:"Texto"`
+		} `json:"conteudo"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&contentResp); err != nil {
+		s.logger.WithError(err).Warn("Failed to decode BCB content API response")
+		return ""
+	}
+
+	if len(contentResp.Conteudo) == 0 {
+		return ""
+	}
+
+	texto := contentResp.Conteudo[0].Texto
+	texto = strings.ReplaceAll(texto, "\r\n", "\n")
+	texto = strings.ReplaceAll(texto, "\r", "\n")
+	texto = s.cleanText(texto)
+	return texto
 }
 
 // processNormas persists a batch of scraped normas concurrently, mirroring each
@@ -368,6 +439,15 @@ func (s *Scraper) processNorma(n models.Norma) {
 		s.stats.Errors++
 		s.mu.Unlock()
 		return
+	}
+
+	if n.Texto == "" {
+		n.Texto = s.FetchText(&n)
+		if n.Texto != "" {
+			if err := s.storage.SaveNorma(&n); err != nil {
+				s.logger.WithError(err).Warn("Failed to save norma text")
+			}
+		}
 	}
 
 	s.meili.IndexNorma(&n)
@@ -415,39 +495,55 @@ func (s *Scraper) GetStats() ScraperStats {
 }
 
 // normalizeTipo maps the BCB short tipo text to a TipoNorma constant. The BCB
-// API spells "Carta-Circular" as "Carta Circular" (space), so both spellings
-// are accepted.
+// API returns tipo labels inconsistently: Resoluções carry an "esfera" suffix
+// (e.g. "Resolução CMN", "Resolução BCB", "Resolução Conjunta", "Resolução Coseg")
+// and Instruções are returned as "Instrução Normativa BCB"; Carta-Circular is
+// spelled with a space ("Carta Circular"). Prefix matching classifies all of
+// these variants regardless of the suffix.
 func normalizeTipo(t string) models.TipoNorma {
-	switch strings.TrimSpace(t) {
-	case "Resolução":
+	t = strings.TrimSpace(t)
+	switch {
+	case strings.HasPrefix(t, "Resolução"):
 		return models.TipoResolucao
-	case "Circular":
+	case t == "Circular":
 		return models.TipoCircular
-	case "Instrução":
-		return models.TipoInstrucao
-	case "Comunicado":
+	case t == "Comunicado":
 		return models.TipoComunicado
-	case "Carta-Circular", "Carta Circular":
+	case strings.HasPrefix(t, "Instrução"):
+		return models.TipoInstrucao
+	case strings.HasPrefix(t, "Carta"):
 		return models.TipoCartaCircular
 	default:
 		return models.TipoOutros
 	}
 }
 
-// apiTipoFor returns the tipo string as it appears in the BCB Search API's
-// TipodoNormativoOWSCHCS field. For most tipos this is the TipoNorma value
-// verbatim; "Carta-Circular" is indexed by the API as "Carta Circular".
-func apiTipoFor(tipo models.TipoNorma) string {
-	if tipo == models.TipoCartaCircular {
+// ApiTipoFor returns the tipo token used to filter the BCB Search API by
+// TipodoNormativoOWSCHCS for a given TipoNorma. Resoluções and Instruções have
+// "esfera"/suffix variants, so a wildcard prefix is used to match every
+// variant (e.g. both "Resolução CMN" and "Resolução BCB"). Carta-Circular is
+// indexed by the API as "Carta Circular" (space, not hyphen).
+func ApiTipoFor(tipo models.TipoNorma) string {
+	switch tipo {
+	case models.TipoResolucao:
+		return "Resolução*"
+	case models.TipoInstrucao:
+		return "Instrução*"
+	case models.TipoCartaCircular:
 		return "Carta Circular"
+	case models.TipoComunicado:
+		return "Comunicado"
+	case models.TipoCircular:
+		return "Circular"
+	default:
+		return string(tipo)
 	}
-	return string(tipo)
 }
 
 
-// parseNumero extracts the integer string from a NumeroOWSNMBR value such as
+// ParseNumero extracts the integer string from a NumeroOWSNMBR value such as
 // "45682.0000000000".
-func parseNumero(v string) string {
+func ParseNumero(v string) string {
 	v = strings.TrimSpace(v)
 	parts := strings.SplitN(v, ".", 2)
 	return strings.TrimSpace(parts[0])
@@ -474,32 +570,82 @@ func formatBrazilianNumero(n string) string {
 	return b.String()
 }
 
-// escapeTipo escapes a tipo value for safe use inside a SharePoint querytext
+// EscapeTipo escapes a tipo value for safe use inside a SharePoint querytext
 // literal (double-quoted). Embedded double quotes are doubled.
-func escapeTipo(t string) string {
+func EscapeTipo(t string) string {
 	return strings.ReplaceAll(strings.TrimSpace(t), `"`, `\"`)
 }
 
-var htmlTagRe = regexp.MustCompile(`<[^>]*>`)
+// FormatDateTime normalizes a datetime string to a readable local-time format
+// without timezone info, e.g. "2026-08-04T21:50:51Z" -> "2026-08-04 21:50:51".
+func FormatDateTime(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return v
+	}
+	v = strings.Replace(v, "T", " ", 1)
+	v = strings.TrimSuffix(v, "Z")
+	v = strings.TrimSpace(v)
+	if len(v) > 19 {
+		v = v[:19]
+	}
+	return v
+}
 
-// stripHTML removes markup from a HitHighlightedSummary string, replacing the
-// BCB "<ddd/>" fragment separator with a space.
-func stripHTML(s string) string {
+var (
+	htmlTagRe      = regexp.MustCompile(`(?is)<[^>]*>`)
+	controlCharsRe = regexp.MustCompile(`[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]`)
+)
+
+var htmlEntities = map[string]string{
+	"&nbsp;": " ",
+	"&lt;": "<",
+	"&gt;": ">",
+	"&amp;": "&",
+	"&quot;": "\"",
+	"&#58;": ":",
+	"&#160;": " ",
+	"&#123;": "{",
+	"&#125;": "}",
+	"&#201;": "É",
+	"&#231;": "ç",
+	"&ldquo;": "\"",
+	"&rdquo;": "\"",
+	"&lsquo;": "'",
+	"&rsquo;": "'",
+	"&mdash;": "—",
+	"&ndash;": "–",
+	"&copy;": "©",
+	"&reg;": "®",
+}
+
+// decodeHTMLEntities replaces known HTML entities with their Unicode equivalents.
+func decodeHTMLEntities(s string) string {
+	for ent, ch := range htmlEntities {
+		s = strings.ReplaceAll(s, ent, ch)
+	}
+	return s
+}
+
+// sanitizeText removes HTML tags, decodes HTML entities, removes control
+// characters, and normalizes whitespace for BCB normative text fields.
+func sanitizeText(s string) string {
 	s = strings.ReplaceAll(s, "<ddd/>", " ")
 	s = htmlTagRe.ReplaceAllString(s, " ")
+	s = decodeHTMLEntities(s)
+	s = controlCharsRe.ReplaceAllString(s, "")
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	s = strings.Join(strings.Fields(s), " ")
+	s = strings.TrimSpace(s)
+	s = strings.ReplaceAll(s, "\u00a0", " ")
+	s = strings.ReplaceAll(s, "\u200b", "")
+	s = strings.ReplaceAll(s, "\u2009", " ")
 	return s
 }
 
 // cleanText cleans and normalizes text
 func (s *Scraper) cleanText(text string) string {
-	// Remove multiple spaces
-	text = strings.Join(strings.Fields(text), " ")
-	// Trim whitespace
-	text = strings.TrimSpace(text)
-	// Replace special quotes and non-breaking spaces
-	text = strings.ReplaceAll(text, "\u00a0", " ")
-	text = strings.ReplaceAll(text, "\u200b", "")
-	text = strings.ReplaceAll(text, "\u2009", " ")
-
+	text = sanitizeText(text)
 	return text
 }

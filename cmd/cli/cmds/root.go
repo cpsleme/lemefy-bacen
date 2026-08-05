@@ -15,8 +15,8 @@ var (
 
 func NewRootCmd() *cobra.Command {
 	rootCmd := &cobra.Command{
-		Use:   "lemefy-bacen",
-		Short: "CLI tool for lemfey-bacen",
+		Use:   "bacen",
+		Short: "CLI tool for Banco Central do Brasil norms",
 		Long:  "A CLI tool for scraping and managing Banco Central do Brasil norms",
 		Run: func(cmd *cobra.Command, args []string) {
 			if err := cmd.Help(); err != nil {
@@ -33,6 +33,8 @@ func NewRootCmd() *cobra.Command {
 	rootCmd.AddCommand(NewScrapeCmd())
 	rootCmd.AddCommand(NewServeCmd())
 	rootCmd.AddCommand(NewNormasCmd())
+	rootCmd.AddCommand(NewVigentesCmd())
+	rootCmd.AddCommand(NewValidateCmd())
 	rootCmd.AddCommand(NewStatsCmd())
 	rootCmd.AddCommand(NewSchedulerCmd())
 	rootCmd.AddCommand(NewConfigCmd())
