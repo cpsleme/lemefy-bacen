@@ -21,6 +21,15 @@ func TestInitWithDefaultConfig(t *testing.T) {
 	if cfg.Database.Path != "data/normas.db" {
 		t.Errorf("expected Database.Path 'data/normas.db', got %s", cfg.Database.Path)
 	}
+	if !cfg.Meilisearch.Enabled {
+		t.Error("expected Meilisearch.Enabled to be true")
+	}
+	if cfg.Meilisearch.Host != "http://localhost:7700" {
+		t.Errorf("expected Meilisearch.Host 'http://localhost:7700', got %s", cfg.Meilisearch.Host)
+	}
+	if cfg.Meilisearch.IndexPrefix != "bcb_" {
+		t.Errorf("expected Meilisearch.IndexPrefix 'bcb_', got %s", cfg.Meilisearch.IndexPrefix)
+	}
 	if cfg.Scraper.BaseURL != "https://www.bcb.gov.br/normativos" {
 		t.Errorf("expected Scraper.BaseURL 'https://www.bcb.gov.br/normativos', got %s", cfg.Scraper.BaseURL)
 	}
@@ -43,11 +52,17 @@ func TestGetDefaultConfig(t *testing.T) {
 	if cfg.App.Port != 8080 {
 		t.Errorf("expected App.Port 8080, got %d", cfg.App.Port)
 	}
+	if cfg.Database.Path != "data/normas.db" {
+		t.Errorf("expected Database.Path 'data/normas.db', got %s", cfg.Database.Path)
+	}
 	if cfg.Scraper.BaseURL != "https://www.bcb.gov.br/normativos" {
 		t.Errorf("expected Scraper.BaseURL 'https://www.bcb.gov.br/normativos', got %s", cfg.Scraper.BaseURL)
 	}
 	if cfg.Scheduler.UpdateCron != "0 2 * * *" {
 		t.Errorf("expected Scheduler.UpdateCron '0 2 * * *', got %s", cfg.Scheduler.UpdateCron)
+	}
+	if cfg.Meilisearch.IndexPrefix != "bcb_" {
+		t.Errorf("expected Meilisearch.IndexPrefix 'bcb_', got %s", cfg.Meilisearch.IndexPrefix)
 	}
 }
 

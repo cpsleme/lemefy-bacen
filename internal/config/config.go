@@ -11,6 +11,17 @@ import (
 	"github.com/spf13/viper"
 )
 
+// MeilisearchConfig holds configuration for syncing data to a local Meilisearch
+// instance. All write operations are best-effort and never block the scraper.
+// Normas are routed to one index per collected tipo (Resolução, Circular, ...),
+// each named as <index_prefix><slug_tipo> (e.g. "bcb_resolucao").
+type MeilisearchConfig struct {
+	Enabled     bool   `mapstructure:"enabled"`
+	Host        string `mapstructure:"host"`
+	APIKey      string `mapstructure:"api_key"`
+	IndexPrefix string `mapstructure:"index_prefix"`
+}
+
 // Config represents the application configuration
 type Config struct {
 	App struct {
@@ -22,6 +33,7 @@ type Config struct {
 	Database struct {
 		Path string `mapstructure:"path"`
 	}
+	Meilisearch MeilisearchConfig `mapstructure:"meilisearch"`
 	Scraper struct {
 		BaseURL        string `mapstructure:"base_url"`
 		Timeout        int    `mapstructure:"timeout"`
@@ -29,6 +41,8 @@ type Config struct {
 		Concurrency    int    `mapstructure:"concurrency"`
 		UserAgent      string `mapstructure:"user_agent"`
 		RequestDelay   int    `mapstructure:"request_delay_ms"`
+		MaxPages       int    `mapstructure:"max_pages"`
+		PageSize       int    `mapstructure:"page_size"`
 	}
 	Scheduler struct {
 		Enabled         bool   `mapstructure:"enabled"`
@@ -66,12 +80,18 @@ func Init(configPath string) (*Config, error) {
 	viper.SetDefault("app.env", "development")
 	viper.SetDefault("app.port", 8080)
 	viper.SetDefault("database.path", "data/normas.db")
+	viper.SetDefault("meilisearch.enabled", true)
+	viper.SetDefault("meilisearch.host", "http://localhost:7700")
+	viper.SetDefault("meilisearch.api_key", "")
+	viper.SetDefault("meilisearch.index_prefix", "bcb_")
 	viper.SetDefault("scraper.base_url", "https://www.bcb.gov.br/normativos")
 	viper.SetDefault("scraper.timeout", 30)
 	viper.SetDefault("scraper.max_depth", 3)
 	viper.SetDefault("scraper.concurrency", 4)
 	viper.SetDefault("scraper.user_agent", "Mozilla/5.0 (compatible; LemefyBacenScraper/1.0)")
-	viper.SetDefault("scraper.request_delay_ms", 100)
+		viper.SetDefault("scraper.request_delay_ms", 100)
+	viper.SetDefault("scraper.max_pages", 10)
+	viper.SetDefault("scraper.page_size", 500)
 	viper.SetDefault("scheduler.enabled", true)
 	viper.SetDefault("scheduler.update_cron", "0 2 * * *") // Every day at 2 AM
 	viper.SetDefault("scheduler.cleanup_cron", "0 3 * * 0") // Every Sunday at 3 AM
@@ -183,13 +203,21 @@ func getDefaultConfig() *Config {
 		}{
 			Path: "data/normas.db",
 		},
+		Meilisearch: MeilisearchConfig{
+			Enabled:     true,
+			Host:        "http://localhost:7700",
+			APIKey:      "",
+			IndexPrefix: "bcb_",
+		},
 		Scraper: struct {
 			BaseURL     string `mapstructure:"base_url"`
 			Timeout     int    `mapstructure:"timeout"`
 			MaxDepth    int    `mapstructure:"max_depth"`
 			Concurrency int    `mapstructure:"concurrency"`
 			UserAgent   string `mapstructure:"user_agent"`
-			RequestDelay int   `mapstructure:"request_delay_ms"`
+			RequestDelay int    `mapstructure:"request_delay_ms"`
+			MaxPages    int    `mapstructure:"max_pages"`
+			PageSize    int    `mapstructure:"page_size"`
 		}{
 			BaseURL:      "https://www.bcb.gov.br/normativos",
 			Timeout:      30,
@@ -197,6 +225,8 @@ func getDefaultConfig() *Config {
 			Concurrency:  4,
 			UserAgent:    "Mozilla/5.0 (compatible; LemefyBacenScraper/1.0)",
 			RequestDelay: 100,
+			MaxPages:     10,
+			PageSize:     500,
 		},
 		Scheduler: struct {
 			Enabled     bool   `mapstructure:"enabled"`

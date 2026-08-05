@@ -496,3 +496,35 @@ func (db *Database) GetNormaCountByDate() (map[string]int, error) {
 
 	return result, nil
 }
+
+// GetAllNormas retrieves every norma stored in the database. Used to perform
+// an initial bulk load into the search index.
+func (db *Database) GetAllNormas() ([]models.Norma, error) {
+	rows, err := db.conn.Query(
+		"SELECT id, numero, tipo, titulo, data_publicacao, data_vigencia, url, situacao, assunto, sumario, arquivo_pdf, created_at, updated_at FROM normas",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query all normas: %w", err)
+	}
+	defer rows.Close()
+
+	var normas []models.Norma
+	for rows.Next() {
+		var norma models.Norma
+		if err := rows.Scan(
+			&norma.ID, &norma.Numero, &norma.Tipo, &norma.Titulo,
+			&norma.DataPublicacao, &norma.DataVigencia, &norma.URL,
+			&norma.Situacao, &norma.Assunto, &norma.Sumario, &norma.ArquivoPDF,
+			&norma.CreatedAt, &norma.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan norma: %w", err)
+		}
+		normas = append(normas, norma)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating normas: %w", err)
+	}
+
+	return normas, nil
+}

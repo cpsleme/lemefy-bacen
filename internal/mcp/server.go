@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/lemefy/lemefy-bacen/internal/config"
+	"github.com/lemefy/lemefy-bacen/internal/meilisearch"
 	"github.com/lemefy/lemefy-bacen/internal/models"
 	"github.com/lemefy/lemefy-bacen/internal/scraper"
 	"github.com/lemefy/lemefy-bacen/internal/scheduler"
@@ -19,6 +20,7 @@ type Server struct {
 	storage   *storage.Database
 	scraper   *scraper.Scraper
 	scheduler *scheduler.Scheduler
+	meili     *meilisearch.Client
 }
 
 func NewServer() (*Server, error) {
@@ -40,6 +42,26 @@ func NewServer() (*Server, error) {
 		storage:   db,
 		scraper:   sc,
 		scheduler: sched,
+	}
+
+	if cfg.Meilisearch.Enabled {
+		meili := meilisearch.NewClient(&cfg.Meilisearch, config.GetLogger())
+		s.scraper.SetSearchClient(meili)
+		if meili.Available() {
+			if err := meili.EnsureIndex(); err != nil {
+				config.GetLogger().WithError(err).Warn("Failed to ensure Meilisearch index")
+			}
+			if meili.NeedsLoad() {
+				if all, err := db.GetAllNormas(); err == nil && len(all) > 0 {
+					if n, err := meili.SyncAll(all); err != nil {
+						config.GetLogger().WithError(err).Warn("Failed to bulk load normas into Meilisearch")
+					} else if n > 0 {
+						config.GetLogger().Infof("Loaded %d normas into Meilisearch", n)
+					}
+				}
+			}
+		}
+		s.meili = meili
 	}
 
 	server := mcp.NewServer(&mcp.Implementation{
@@ -443,10 +465,13 @@ func (s *Server) handleRunNow(ctx context.Context, req *mcp.CallToolRequest) (*m
 func (s *Server) handleGetConfig(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	cfg := s.config
 
-	result := fmt.Sprintf("=== Application Configuration ===\nApp Name: %s\nVersion: %s\nEnvironment: %s\nPort: %d\n\nDatabase:\n  Path: %s\n\nScraper:\n  Base URL: %s\n  Timeout: %ds\n  Max Depth: %d\n  Concurrency: %d\n  Request Delay: %dms\n\nScheduler:\n  Enabled: %v\n  Update cron: %s\n  Cleanup cron: %s\n  Cleanup days: %d\n\nLogging:\n  Level: %s\n  Format: %s\n  File: %s\n",
+ 	result := fmt.Sprintf("=== Application Configuration ===\nApp Name: %s\nVersion: %s\nEnvironment: %s\nPort: %d\n\nDatabase:\n  Path: %s\n\nMeilisearch:\n  Enabled:        %v\n  Host:           %s\n  Index Prefix:   %s\n  Index per tipo: bcb_resolucao, bcb_circular, bcb_instrucao, bcb_comunicado, bcb_carta_circular, bcb_outros\n\nScraper:\n  Base URL: %s\n  Timeout: %ds\n  Max Depth: %d\n  Concurrency: %d\n  Request Delay: %dms\n  Max Pages: %d\n  Page Size: %d\n\nScheduler:\n  Enabled: %v\n  Update cron: %s\n  Cleanup cron: %s\n  Cleanup days: %d\n\nLogging:\n  Level: %s\n  Format: %s\n  File: %s\n",
 		cfg.App.Name, cfg.App.Version, cfg.App.Env, cfg.App.Port,
-		cfg.Database.Path, cfg.Scraper.BaseURL, cfg.Scraper.Timeout,
+		cfg.Database.Path, cfg.Meilisearch.Enabled, cfg.Meilisearch.Host,
+		cfg.Meilisearch.IndexPrefix,
+		cfg.Scraper.BaseURL, cfg.Scraper.Timeout,
 		cfg.Scraper.MaxDepth, cfg.Scraper.Concurrency, cfg.Scraper.RequestDelay,
+		cfg.Scraper.MaxPages, cfg.Scraper.PageSize,
 		cfg.Scheduler.Enabled, cfg.Scheduler.UpdateCron, cfg.Scheduler.CleanupCron,
 		cfg.Scheduler.CleanupDays, cfg.Logging.Level, cfg.Logging.Format, cfg.Logging.File,
 	)
