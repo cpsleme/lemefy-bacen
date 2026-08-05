@@ -347,6 +347,24 @@ func (s *Scraper) MapRowToNorma(r ApiRow) (models.Norma, bool) {
 	}, true
 }
 
+// contentTipoFor returns the BCB content API tipo value for a given stored tipo.
+func contentTipoFor(tipo models.TipoNorma) string {
+	switch tipo {
+	case models.TipoInstrucao:
+		return "Instrução Normativa BCB"
+	case models.TipoComunicado:
+		return "Comunicado"
+	case models.TipoCartaCircular:
+		return "Carta Circular"
+	case models.TipoCircular:
+		return "Circular"
+	case models.TipoResolucao:
+		return "Resolução"
+	default:
+		return string(tipo)
+	}
+}
+
 // contentEndpointFor returns the BCB content API endpoint for a given tipo.
 func contentEndpointFor(tipo models.TipoNorma) string {
 	switch tipo {
@@ -371,7 +389,7 @@ func (s *Scraper) FetchText(norma *models.Norma) string {
 	}
 
 	q := u.Query()
-	q.Set("p1", string(norma.Tipo))
+	q.Set("p1", contentTipoFor(norma.Tipo))
 	q.Set("p2", norma.Numero)
 	u.RawQuery = q.Encode()
 
