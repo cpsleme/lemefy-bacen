@@ -14,6 +14,7 @@ import (
 	"github.com/lemefy/lemefy-bacen/internal/config"
 	"github.com/lemefy/lemefy-bacen/internal/meilisearch"
 	"github.com/lemefy/lemefy-bacen/internal/models"
+	"github.com/lemefy/lemefy-bacen/internal/parsers"
 	"github.com/lemefy/lemefy-bacen/internal/storage"
 	"github.com/sirupsen/logrus"
 )
@@ -27,6 +28,9 @@ const (
 	// BCB API page size. The endpoint caps rowlimit and silently trims larger values.
 	defaultPageSize = 500
 	defaultMaxPages = 10
+
+	// Base URL used to download attached documents (PDFs) of a normativo.
+	bcbDownloadBase = "https://www.bcb.gov.br/pre/normativos/busca/downloadNormativo.asp"
 )
 
 // apiResponse models the JSON document returned by the BCB search API.
@@ -54,17 +58,17 @@ type ApiRow struct {
 // Scraper collects Banco Central norms via the BCB Search API and mirrors them
 // into the local SQLite store and (when configured) Meilisearch.
 type Scraper struct {
-	config     *config.Config
-	storage    *storage.Database
-	meili      *meilisearch.Client
-	logger     *logrus.Logger
-	httpClient *http.Client
+	config        *config.Config
+	storage       *storage.Database
+	meili         *meilisearch.Client
+	logger        *logrus.Logger
+	httpClient    *http.Client
 	contentClient *http.Client
-	maxPages   int
-	pageSize   int
+	maxPages      int
+	pageSize      int
 
-	wg   sync.WaitGroup
-	mu   sync.Mutex
+	wg    sync.WaitGroup
+	mu    sync.Mutex
 	stats ScraperStats
 
 	contentSemaphore chan struct{}
@@ -94,13 +98,13 @@ func NewScraper(cfg *config.Config, db *storage.Database) *Scraper {
 	}
 
 	return &Scraper{
-		config:     cfg,
-		storage:    db,
-		logger:     logger,
-		httpClient: &http.Client{Timeout: time.Duration(cfg.Scraper.Timeout) * time.Second},
+		config:        cfg,
+		storage:       db,
+		logger:        logger,
+		httpClient:    &http.Client{Timeout: time.Duration(cfg.Scraper.Timeout) * time.Second},
 		contentClient: &http.Client{Timeout: 60 * time.Second},
-		maxPages:   maxPages,
-		pageSize:   pageSize,
+		maxPages:      maxPages,
+		pageSize:      pageSize,
 		stats: ScraperStats{
 			StartTime: time.Now(),
 		},
@@ -139,10 +143,10 @@ func (s *Scraper) Run() error {
 	duration := s.stats.EndTime.Sub(s.stats.StartTime).Milliseconds()
 
 	s.logger.WithFields(logrus.Fields{
-		"found":    s.stats.NormasFound,
-		"added":    s.stats.NormasAdded,
-		"updated":  s.stats.NormasUpdated,
-		"errors":   s.stats.Errors,
+		"found":       s.stats.NormasFound,
+		"added":       s.stats.NormasAdded,
+		"updated":     s.stats.NormasUpdated,
+		"errors":      s.stats.Errors,
 		"duration_ms": duration,
 	}).Info("Scraping completed")
 
@@ -159,6 +163,10 @@ func (s *Scraper) Run() error {
 		status,
 		"",
 	)
+
+	if _, migrateErr := s.storage.MigrateLegacyReferencias(); migrateErr != nil {
+		s.logger.WithError(migrateErr).Warn("Failed to migrate legacy referencias")
+	}
 
 	return err
 }
@@ -189,13 +197,67 @@ func (s *Scraper) ScrapeByTipoWithLimit(tipo models.TipoNorma, limit int) error 
 	return s.saveHistory()
 }
 
+// ScrapeIncremental scales a partial scrape to only norms published since the
+// newest data_publicacao already stored (minus a configurable lookback window).
+// On an empty database it falls back to a full run. This avoids re-fetching the
+// whole history on every daily collection.
+func (s *Scraper) ScrapeIncremental() error {
+	s.resetStats()
+
+	maxPub, err := s.storage.GetMaxDataPublicacao()
+	if err != nil {
+		return fmt.Errorf("failed to get last publication date: %w", err)
+	}
+	if maxPub == "" {
+		s.logger.Info("Database empty; running full scrape")
+		return s.Run()
+	}
+
+	last, err := time.Parse("2006-01-02", maxPub)
+	if err != nil {
+		return fmt.Errorf("failed to parse last publication date %q: %w", maxPub, err)
+	}
+	lookback := s.lookbackDays()
+	start := last.AddDate(0, 0, -lookback)
+	refinement := fmt.Sprintf(`data:%s..%s`,
+		start.Format("2006-01-02T15:04:05"), time.Now().UTC().Format("2006-01-02T15:04:05"))
+
+	s.logger.WithFields(logrus.Fields{
+		"since":         start.Format("2006-01-02"),
+		"lookback_days": lookback,
+	}).Info("Running incremental scrape since last publication date")
+
+	normas, err := s.fetchNormas(s.baseQuery(), refinement, s.maxPages, 0)
+	if err != nil {
+		return fmt.Errorf("failed to scrape incrementally: %w", err)
+	}
+
+	s.mu.Lock()
+	s.stats.NormasFound = len(normas)
+	s.mu.Unlock()
+
+	s.processNormas(normas)
+
+	s.stats.EndTime = time.Now()
+	return s.saveHistory()
+}
+
+// lookbackDays returns the configured incremental safety window, defaulting to
+// 3 days when unset (0 or negative).
+func (s *Scraper) lookbackDays() int {
+	if s.config != nil && s.config.Scraper.IncrementalLookbackDays > 0 {
+		return s.config.Scraper.IncrementalLookbackDays
+	}
+	return 3
+}
+
 // ScrapeRecent scrapes recent norms published within the last `days` days.
 func (s *Scraper) ScrapeRecent(days int) error {
 	if days <= 0 {
 		days = 30
 	}
 	start := time.Now().UTC().AddDate(0, 0, -days)
-	refinement := fmt.Sprintf(`Data:range(datetime(%s),datetime(%s))`,
+	refinement := fmt.Sprintf(`data:%s..%s`,
 		start.Format("2006-01-02T15:04:05"), time.Now().UTC().Format("2006-01-02T15:04:05"))
 
 	s.resetStats()
@@ -331,10 +393,6 @@ func (s *Scraper) MapRowToNorma(r ApiRow) (models.Norma, bool) {
 	}
 
 	assunto := s.cleanText(r.AssuntoNormativoOWSMTXT)
-	sumario := s.cleanText(r.HitHighlightedSummary)
-	if len(assunto) > len(sumario) {
-		sumario = assunto
-	}
 
 	return models.Norma{
 		Numero:         numero,
@@ -343,10 +401,8 @@ func (s *Scraper) MapRowToNorma(r ApiRow) (models.Norma, bool) {
 		DataPublicacao: dataPub,
 		DataVigencia:   dataPub,
 		URL:            docURL,
-		TextoURL:       docURL,
 		Situacao:       situacao,
 		Assunto:        assunto,
-		Sumario:        sumario,
 		ArquivoPDF:     "",
 		Texto:          "",
 	}, true
@@ -380,81 +436,17 @@ func contentEndpointFor(tipo models.TipoNorma) string {
 	}
 }
 
-// parseDocumentosPDF splits the BCB Documentos string into structured items.
-// Input format: "file.pdf;123#;file2.pdf;456#;"
-func parseDocumentosPDF(raw string) []models.DocumentoPDF {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
+// documentoURL builds the download URL for a normativo attachment, e.g.
+// "Circ_4015_v1_O.pdf" of content id 51025 maps to:
+//
+//	https://www.bcb.gov.br/pre/normativos/busca/downloadNormativo.asp?arquivo=/Lists/Normativos/Attachments/51025/Circ_4015_v1_O.pdf
+func documentoURL(contentID, nome string) string {
+	nome = strings.TrimSpace(nome)
+	if contentID == "" || nome == "" {
+		return ""
 	}
-	parts := strings.Split(raw, ";")
-	var out []models.DocumentoPDF
-	for i := 0; i < len(parts); i += 2 {
-		nome := strings.TrimSpace(parts[i])
-		if nome == "" {
-			continue
-		}
-		id := ""
-		if i+1 < len(parts) {
-			id = strings.TrimSpace(parts[i+1])
-		}
-		out = append(out, models.DocumentoPDF{Nome: nome, ID: id})
-	}
-	return out
-}
-
-// parseNormasVinculadas splits the BCB NormasVinculadas string into structured items.
-// Input format: "TIPO;@NUMERO;@ANO;#TIPO2;@NUMERO2;@ANO2;#"
-func parseNormasVinculadas(raw string) []models.NormaVinculada {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-	parts := strings.Split(raw, "#")
-	var out []models.NormaVinculada
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-		fields := strings.Split(p, ";")
-		tipo := strings.TrimSpace(fields[0])
-		numero := ""
-		ano := ""
-		for _, f := range fields[1:] {
-			f = strings.TrimSpace(f)
-			if f == "" {
-				continue
-			}
-			if strings.HasPrefix(f, "@") {
-				if numero == "" {
-					numero = strings.TrimPrefix(f, "@")
-				} else if ano == "" {
-					ano = strings.TrimPrefix(f, "@")
-				}
-			}
-		}
-		out = append(out, models.NormaVinculada{Tipo: tipo, Numero: numero, Ano: ano})
-	}
-	return out
-}
-
-// parseReferencias splits the BCB Referencias string into structured items.
-// Input format: "texto da ref.;#outra ref.;#"
-func parseReferencias(raw string) []models.Referencia {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-	parts := strings.Split(raw, "#")
-	var out []models.Referencia
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, models.Referencia(p))
-		}
-	}
-	return out
+	return fmt.Sprintf("%s?arquivo=/Lists/Normativos/Attachments/%s/%s",
+		bcbDownloadBase, url.PathEscape(contentID), url.PathEscape(nome))
 }
 
 // FetchText fetches the full text of a norma from the BCB content API.
@@ -511,7 +503,7 @@ func (s *Scraper) FetchText(norma *models.Norma) string {
 	}
 
 	item := contentResp.Conteudo[0]
-	
+
 	if textoVal, ok := item["Texto"].(string); ok {
 		texto := textoVal
 		texto = strings.ReplaceAll(texto, "\r\n", "\n")
@@ -519,47 +511,54 @@ func (s *Scraper) FetchText(norma *models.Norma) string {
 		texto = s.cleanText(texto)
 		norma.Texto = texto
 	}
-	
+
 	if docVal, ok := item["Documentos"].(string); ok && docVal != "" {
 		parts := strings.Split(docVal, ";")
 		if len(parts) >= 1 {
 			norma.ArquivoPDF = strings.TrimSpace(parts[0])
 		}
-		norma.Documentos = parseDocumentosPDF(docVal)
+		docs := parsers.ParseDocumentosPDF(docVal)
+		if contentID, ok := item["Id"].(float64); ok {
+			idStr := strconv.FormatInt(int64(contentID), 10)
+			for i := range docs {
+				docs[i].URL = documentoURL(idStr, docs[i].Nome)
+			}
+		}
+		norma.Documentos = docs
 	}
-	
+
 	if douVal, ok := item["DOU"].(string); ok {
 		norma.DOU = s.cleanText(douVal)
 	}
-	
+
 	if assuntoVal, ok := item["Assunto"].(string); ok {
 		norma.Assunto = s.cleanText(assuntoVal)
 	}
-	
-	if normasVal, ok := item["NormasVinculadas"].(string); ok {
-		norma.NormasVinculadas = parseNormasVinculadas(normasVal)
+
+	if normasVal, ok := item["NormasVinculadas"].(string); ok && normasVal != "" {
+		norma.NormasVinculadas = parsers.ParseNormasVinculadas(normasVal)
 	}
-	
-	if refVal, ok := item["Referencias"].(string); ok {
-		norma.Referencias = parseReferencias(refVal)
+
+	if refVal, ok := item["Referencias"].(string); ok && refVal != "" {
+		norma.Referencias = parsers.ParseReferencias(refVal)
 	}
-	
+
 	if atuVal, ok := item["Atualizacoes"].(string); ok {
 		norma.Atualizacoes = s.cleanText(atuVal)
 	}
-	
+
 	if dataAssVal, ok := item["DataAssinatura"].(string); ok {
 		norma.DataAssinatura = s.cleanText(dataAssVal)
 	}
-	
+
 	if votoVal, ok := item["Voto"].(string); ok {
 		norma.Voto = s.cleanText(votoVal)
 	}
-	
+
 	if versaoVal, ok := item["VersaoNormativo"].(string); ok {
 		norma.VersaoNormativo = s.cleanText(versaoVal)
 	}
-	
+
 	return norma.Texto
 }
 
@@ -639,7 +638,7 @@ func (s *Scraper) saveHistory() error {
 	if s.stats.Errors > 0 {
 		status = "completed_with_errors"
 	}
-	return s.storage.SaveScrapeHistory(
+	err := s.storage.SaveScrapeHistory(
 		s.stats.NormasFound,
 		s.stats.NormasAdded,
 		s.stats.NormasUpdated,
@@ -647,6 +646,12 @@ func (s *Scraper) saveHistory() error {
 		status,
 		"",
 	)
+
+	if _, migrateErr := s.storage.MigrateLegacyReferencias(); migrateErr != nil {
+		s.logger.WithError(migrateErr).Warn("Failed to migrate legacy referencias")
+	}
+
+	return err
 }
 
 // GetStats returns the scraper statistics
@@ -702,7 +707,6 @@ func ApiTipoFor(tipo models.TipoNorma) string {
 	}
 }
 
-
 // ParseNumero extracts the integer string from a NumeroOWSNMBR value such as
 // "45682.0000000000".
 func ParseNumero(v string) string {
@@ -757,25 +761,25 @@ var (
 )
 
 var htmlEntities = map[string]string{
-	"&nbsp;": " ",
-	"&lt;": "<",
-	"&gt;": ">",
-	"&amp;": "&",
-	"&quot;": "\"",
-	"&#58;": ":",
-	"&#160;": " ",
-	"&#123;": "{",
-	"&#125;": "}",
-	"&#201;": "É",
-	"&#231;": "ç",
+	"&nbsp;":  " ",
+	"&lt;":    "<",
+	"&gt;":    ">",
+	"&amp;":   "&",
+	"&quot;":  "\"",
+	"&#58;":   ":",
+	"&#160;":  " ",
+	"&#123;":  "{",
+	"&#125;":  "}",
+	"&#201;":  "É",
+	"&#231;":  "ç",
 	"&ldquo;": "\"",
 	"&rdquo;": "\"",
 	"&lsquo;": "'",
 	"&rsquo;": "'",
 	"&mdash;": "—",
 	"&ndash;": "–",
-	"&copy;": "©",
-	"&reg;": "®",
+	"&copy;":  "©",
+	"&reg;":   "®",
 }
 
 // decodeHTMLEntities replaces known HTML entities with their Unicode equivalents.

@@ -8,10 +8,12 @@ import (
 )
 
 type scrapeCmdFlags struct {
-	tipo   string
-	recent bool
-	days   int
-	limit  int
+	tipo        string
+	recent      bool
+	incremental bool
+	full        bool
+	days        int
+	limit       int
 }
 
 func NewScrapeCmd() *cobra.Command {
@@ -35,22 +37,32 @@ func NewScrapeCmd() *cobra.Command {
 				return runScrapeRecent(app, flags.days)
 			}
 
-		if flags.tipo != "" {
-			return runScrapeByTipo(app, flags.tipo, flags.limit)
-		}
+			if flags.incremental {
+				return runScrapeIncremental(app)
+			}
 
-		if flags.limit > 0 {
-			return runScrapeAllWithLimit(app, flags.limit)
-		}
+			if flags.full {
+				return runScrape(app)
+			}
 
-		return runScrape(app)
+			if flags.tipo != "" {
+				return runScrapeByTipo(app, flags.tipo, flags.limit)
+			}
+
+			if flags.limit > 0 {
+				return runScrapeAllWithLimit(app, flags.limit)
+			}
+
+			return runScrape(app)
 		},
 	}
 
-		cmd.Flags().StringVarP(&flags.tipo, "tipo", "t", "", "Scrape norms by type (Resolução, Circular, Instrução, Comunicado, Carta-Circular)")
-		cmd.Flags().BoolVarP(&flags.recent, "recent", "r", false, "Scrape recent norms")
-		cmd.Flags().IntVarP(&flags.days, "days", "d", 30, "Number of days for recent scrape (default: 30)")
-		cmd.Flags().IntVarP(&flags.limit, "limit", "l", 0, "Limit number of norms to scrape per type (0 = no limit)")
+	cmd.Flags().StringVarP(&flags.tipo, "tipo", "t", "", "Scrape norms by type (Resolução, Circular, Instrução, Comunicado, Carta-Circular)")
+	cmd.Flags().BoolVarP(&flags.recent, "recent", "r", false, "Scrape recent norms")
+	cmd.Flags().BoolVarP(&flags.incremental, "incremental", "i", false, "Scrape only norms published since the last stored publication date")
+	cmd.Flags().BoolVarP(&flags.full, "full", "f", false, "Force a full reload of all norms")
+	cmd.Flags().IntVarP(&flags.days, "days", "d", 30, "Number of days for recent scrape (default: 30)")
+	cmd.Flags().IntVarP(&flags.limit, "limit", "l", 0, "Limit number of norms to scrape per type (0 = no limit)")
 
 	return cmd
 }
@@ -123,6 +135,16 @@ func runScrapeRecent(app *App, days int) error {
 	err := app.Scraper.ScrapeRecent(days)
 	if err != nil {
 		return fmt.Errorf("recent scrape failed: %w", err)
+	}
+
+	printScrapeStats(app)
+	return nil
+}
+
+func runScrapeIncremental(app *App) error {
+	err := app.Scraper.ScrapeIncremental()
+	if err != nil {
+		return fmt.Errorf("incremental scrape failed: %w", err)
 	}
 
 	printScrapeStats(app)

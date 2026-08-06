@@ -87,7 +87,6 @@ func TestIndexAndRetrieveNorma(t *testing.T) {
 		URL:            "https://example.com/test-norma-9999",
 		Situacao:       "Vigente",
 		Assunto:        "automated test",
-		Sumario:        "sumario de teste",
 		ArquivoPDF:     "https://example.com/test.pdf",
 	}
 

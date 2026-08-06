@@ -313,10 +313,8 @@ func compareNormas(label string, a, b models.Norma) []string {
 		{"DataPublicacao", scraper.FormatDate(a.DataPublicacao), scraper.FormatDate(b.DataPublicacao)},
 		{"DataVigencia", scraper.FormatDate(a.DataVigencia), scraper.FormatDate(b.DataVigencia)},
 		{"URL", normalizeURL(a.URL), normalizeURL(b.URL)},
-		{"TextoURL", normalizeURL(a.TextoURL), normalizeURL(b.TextoURL)},
 		{"Situacao", a.Situacao, b.Situacao},
 		{"Assunto", a.Assunto, b.Assunto},
-		{"Sumario", a.Sumario, b.Sumario},
 		{"Texto", a.Texto, b.Texto},
 		{"ArquivoPDF", a.ArquivoPDF, b.ArquivoPDF},
 		{"DOU", a.DOU, b.DOU},
@@ -338,7 +336,7 @@ func compareNormas(label string, a, b models.Norma) []string {
 	if !slices.EqualFunc(a.NormasVinculadas, b.NormasVinculadas, func(a, b models.NormaVinculada) bool { return a.Equal(b) }) {
 		diffs = append(diffs, fmt.Sprintf("[%s] NormasVinculadas: %d items != %d items", label, len(a.NormasVinculadas), len(b.NormasVinculadas)))
 	}
-	if !slices.EqualFunc(a.Referencias, b.Referencias, func(a, b models.Referencia) bool { return a == b }) {
+	if !slices.EqualFunc(a.Referencias, b.Referencias, func(a, b models.Referencia) bool { return a.Equal(b) }) {
 		diffs = append(diffs, fmt.Sprintf("[%s] Referencias: %d items != %d items", label, len(a.Referencias), len(b.Referencias)))
 	}
 

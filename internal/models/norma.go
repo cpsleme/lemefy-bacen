@@ -20,10 +20,11 @@ const (
 type DocumentoPDF struct {
 	Nome string `json:"nome"`
 	ID   string `json:"id"`
+	URL  string `json:"url,omitempty"`
 }
 
 func (a DocumentoPDF) Equal(b DocumentoPDF) bool {
-	return a.Nome == b.Nome && a.ID == b.ID
+	return a.Nome == b.Nome && a.ID == b.ID && a.URL == b.URL
 }
 
 // NormaVinculada represents a related norm returned by the BCB content API.
@@ -38,7 +39,14 @@ func (a NormaVinculada) Equal(b NormaVinculada) bool {
 }
 
 // Referencia represents a reference returned by the BCB content API.
-type Referencia string
+type Referencia struct {
+	Texto string `json:"texto"`
+	URL   string `json:"url"`
+}
+
+func (a Referencia) Equal(b Referencia) bool {
+	return a.Texto == b.Texto && a.URL == b.URL
+}
 
 // Norma representa uma norma do Banco Central do Brasil
 type Norma struct {
@@ -49,10 +57,8 @@ type Norma struct {
 	DataPublicacao  string          `json:"data_publicacao" db:"data_publicacao"`
 	DataVigencia    string          `json:"data_vigencia" db:"data_vigencia"`
 	URL             string          `json:"url" db:"url"`
-	TextoURL        string          `json:"texto_url" db:"texto_url"`
 	Situacao        string          `json:"situacao" db:"situacao"`
 	Assunto         string          `json:"assunto" db:"assunto"`
-	Sumario         string          `json:"sumario" db:"sumario"`
 	Texto           string          `json:"texto" db:"texto"`
 	ArquivoPDF      string          `json:"arquivo_pdf" db:"arquivo_pdf"`
 	Documentos      []DocumentoPDF  `json:"documentos" db:"documentos"`

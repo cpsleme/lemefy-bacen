@@ -41,7 +41,6 @@ func TestSaveAndGetNorma(t *testing.T) {
 		URL:           "https://example.com/norma/123",
 		Situacao:      "Vigente",
 		Assunto:       "Test subject",
-		Sumario:       "Test summary",
 	}
 
 	err = db.SaveNorma(norma)

@@ -33,11 +33,11 @@ func NewScheduler(cfg *config.Config, db *storage.Database, sc *scraper.Scraper)
 	)
 
 	return &Scheduler{
-		cron:     c,
-		config:   cfg,
-		storage:  db,
-		logger:   logger,
-		scraper:  sc,
+		cron:      c,
+		config:    cfg,
+		storage:   db,
+		logger:    logger,
+		scraper:   sc,
 		isRunning: false,
 	}
 }
@@ -95,7 +95,7 @@ func (s *Scheduler) Stop() error {
 	}
 
 	s.logger.Info("Stopping scheduler...")
-	
+
 	// Stop cron
 	ctx := s.cron.Stop()
 	<-ctx.Done()
@@ -135,8 +135,9 @@ func (s *Scheduler) runDailyUpdate() {
 
 	start := time.Now()
 
-	// Run scraper
-	err := s.scraper.Run()
+	// Run incremental scraper to avoid re-fetching the whole history on each
+	// daily collection.
+	err := s.scraper.ScrapeIncremental()
 	if err != nil {
 		s.logger.WithError(err).Error("Daily update failed")
 		s.saveUpdateStatus("failed", err.Error())

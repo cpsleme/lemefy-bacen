@@ -34,21 +34,25 @@ type Config struct {
 		Path string `mapstructure:"path"`
 	}
 	Meilisearch MeilisearchConfig `mapstructure:"meilisearch"`
-	Scraper struct {
-		BaseURL        string `mapstructure:"base_url"`
-		Timeout        int    `mapstructure:"timeout"`
-		MaxDepth       int    `mapstructure:"max_depth"`
-		Concurrency    int    `mapstructure:"concurrency"`
-		UserAgent      string `mapstructure:"user_agent"`
-		RequestDelay   int    `mapstructure:"request_delay_ms"`
-		MaxPages       int    `mapstructure:"max_pages"`
-		PageSize       int    `mapstructure:"page_size"`
+	Scraper     struct {
+		BaseURL      string `mapstructure:"base_url"`
+		Timeout      int    `mapstructure:"timeout"`
+		MaxDepth     int    `mapstructure:"max_depth"`
+		Concurrency  int    `mapstructure:"concurrency"`
+		UserAgent    string `mapstructure:"user_agent"`
+		RequestDelay int    `mapstructure:"request_delay_ms"`
+		MaxPages     int    `mapstructure:"max_pages"`
+		PageSize     int    `mapstructure:"page_size"`
+		// IncrementalLookbackDays is the safety window (in days) added before the
+		// newest publication date already stored when running an incremental
+		// scrape, so norms published slightly out of order are still caught.
+		IncrementalLookbackDays int `mapstructure:"incremental_lookback_days"`
 	}
 	Scheduler struct {
-		Enabled         bool   `mapstructure:"enabled"`
-		UpdateCron      string `mapstructure:"update_cron"`
-		CleanupCron     string `mapstructure:"cleanup_cron"`
-		CleanupDays     int    `mapstructure:"cleanup_days"`
+		Enabled     bool   `mapstructure:"enabled"`
+		UpdateCron  string `mapstructure:"update_cron"`
+		CleanupCron string `mapstructure:"cleanup_cron"`
+		CleanupDays int    `mapstructure:"cleanup_days"`
 	}
 	Logging struct {
 		Level  string `mapstructure:"level"`
@@ -89,11 +93,12 @@ func Init(configPath string) (*Config, error) {
 	viper.SetDefault("scraper.max_depth", 3)
 	viper.SetDefault("scraper.concurrency", 4)
 	viper.SetDefault("scraper.user_agent", "Mozilla/5.0 (compatible; LemefyBacenScraper/1.0)")
-		viper.SetDefault("scraper.request_delay_ms", 100)
+	viper.SetDefault("scraper.request_delay_ms", 100)
 	viper.SetDefault("scraper.max_pages", 10)
 	viper.SetDefault("scraper.page_size", 500)
+	viper.SetDefault("scraper.incremental_lookback_days", 3)
 	viper.SetDefault("scheduler.enabled", true)
-	viper.SetDefault("scheduler.update_cron", "0 2 * * *") // Every day at 2 AM
+	viper.SetDefault("scheduler.update_cron", "0 2 * * *")  // Every day at 2 AM
 	viper.SetDefault("scheduler.cleanup_cron", "0 3 * * 0") // Every Sunday at 3 AM
 	viper.SetDefault("scheduler.cleanup_days", 365)
 	viper.SetDefault("logging.level", "info")
@@ -161,8 +166,8 @@ func initLogger(cfg struct {
 		logger.SetFormatter(&logrus.JSONFormatter{})
 	} else {
 		logger.SetFormatter(&logrus.TextFormatter{
-			FullTimestamp:   true,
-			DisableColors:  false,
+			FullTimestamp: true,
+			DisableColors: false,
 		})
 	}
 
@@ -210,23 +215,25 @@ func getDefaultConfig() *Config {
 			IndexPrefix: "bcb_",
 		},
 		Scraper: struct {
-			BaseURL     string `mapstructure:"base_url"`
-			Timeout     int    `mapstructure:"timeout"`
-			MaxDepth    int    `mapstructure:"max_depth"`
-			Concurrency int    `mapstructure:"concurrency"`
-			UserAgent   string `mapstructure:"user_agent"`
-			RequestDelay int    `mapstructure:"request_delay_ms"`
-			MaxPages    int    `mapstructure:"max_pages"`
-			PageSize    int    `mapstructure:"page_size"`
+			BaseURL                 string `mapstructure:"base_url"`
+			Timeout                 int    `mapstructure:"timeout"`
+			MaxDepth                int    `mapstructure:"max_depth"`
+			Concurrency             int    `mapstructure:"concurrency"`
+			UserAgent               string `mapstructure:"user_agent"`
+			RequestDelay            int    `mapstructure:"request_delay_ms"`
+			MaxPages                int    `mapstructure:"max_pages"`
+			PageSize                int    `mapstructure:"page_size"`
+			IncrementalLookbackDays int    `mapstructure:"incremental_lookback_days"`
 		}{
-			BaseURL:      "https://www.bcb.gov.br/normativos",
-			Timeout:      30,
-			MaxDepth:     3,
-			Concurrency:  4,
-			UserAgent:    "Mozilla/5.0 (compatible; LemefyBacenScraper/1.0)",
-			RequestDelay: 100,
-			MaxPages:     10,
-			PageSize:     500,
+			BaseURL:                 "https://www.bcb.gov.br/normativos",
+			Timeout:                 30,
+			MaxDepth:                3,
+			Concurrency:             4,
+			UserAgent:               "Mozilla/5.0 (compatible; LemefyBacenScraper/1.0)",
+			RequestDelay:            100,
+			MaxPages:                10,
+			PageSize:                500,
+			IncrementalLookbackDays: 3,
 		},
 		Scheduler: struct {
 			Enabled     bool   `mapstructure:"enabled"`
